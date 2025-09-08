@@ -1,0 +1,19 @@
+
+experiment: exp1-debug
+
+stages:
+  - name: vision
+    epochs: 1
+    batch_size: 2
+    grad_accum_steps: 1
+
+  - name: lang_vision
+    epochs: 1
+    batch_size: 2
+    grad_accum_steps: 1
+
+debug:
+  dataset_subset: 20
+  wandb_suffix: "-debug"
+  wandb_tags: ["debug"]
+

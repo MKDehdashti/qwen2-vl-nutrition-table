@@ -1,0 +1,63 @@
+# -----------------------
+# Python
+# -----------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+*.log
+
+# -----------------------
+# Virtual environments
+# -----------------------
+envs/
+venv/
+qwenv/
+.venv/
+
+# -----------------------
+# Caches
+# -----------------------
+.cache/
+hf_cache/
+hf_home/
+tmp/
+pip-wheel-metadata/
+*.lock
+
+# -----------------------
+# ML training outputs
+# -----------------------
+runs/
+wandb/
+checkpoints/
+*.pt
+*.bin
+*.ckpt
+*.safetensors
+*.h5
+*.onnx
+
+# -----------------------
+# Jupyter
+# -----------------------
+.ipynb_checkpoints/
+*.ipynb_save
+
+# -----------------------
+# Editor / IDE
+# -----------------------
+.vscode/
+.idea/
+.DS_Store
+
+# -----------------------
+# Secrets
+# -----------------------
+.env
+*.env
+secrets/
+.secrets

@@ -1,0 +1,26 @@
+# PyTorch stack (CUDA 12.1 wheels)
+torch==2.4.1+cu121
+torchvision==0.19.1+cu121
+torchaudio==2.4.1+cu121
+--extra-index-url https://download.pytorch.org/whl/cu121
+
+# Hugging Face ecosystem (dev branches + libs)
+git+https://github.com/huggingface/transformers.git
+git+https://github.com/huggingface/trl.git
+datasets==3.0.2
+bitsandbytes==0.44.1
+peft==0.13.2
+qwen-vl-utils==0.0.8
+wandb==0.18.5
+accelerate>=1.4.0
+
+# Visualization & utils
+matplotlib
+IPython
+
+# Performance
+#flash-attn
+triton
+
+dotenv
+pyyaml
