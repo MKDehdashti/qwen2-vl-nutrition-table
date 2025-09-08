@@ -1,110 +1,112 @@
-# Nutrition Table Detection (Qwen-VL Fine-Tuning)
+# Nutrition-Table Training Pipeline
 
-This project fine-tunes **Qwen2-VL** for bounding-box detection of nutrition tables in images.
-It uses Hugging Face `transformers`, `trl`, LoRA adapters, and Weights & Biases (W\&B) for experiment tracking.
+This repository provides a training and evaluation pipeline for fine-tuning [Qwen-VL](https://huggingface.co/Qwen) (developed by Alibaba Cloud, Apache-2.0 License) on **nutrition table detection and segmentation** tasks.  
+It implements a multi-stage LoRA training process with integrated experiment tracking using **Weights & Biases (W&B)**.
 
 ---
 
-## 🔧 Setup
+## Project Structure
+- **configs/** → Experiment YAMLs (e.g., exp1.yaml, exp1_debug.yaml)  
+- **src/** → Source code (train.py, utilities, evaluation scripts)  
+- **models/** → Pretrained and fine-tuned weights (ignored by git)  
+- **outputs/** → Evaluation results and plots (ignored by git)  
+- **runs/** → Training logs and checkpoints (ignored by git)  
+- **wandb/** → W&B logging cache (ignored by git)  
 
-### 1. Clone & enter project
+---
+
+## Features
+- Multi-stage training workflow (baseline → vision → language+vision)  
+- LoRA fine-tuning with regex-based layer targeting  
+- Configuration-driven experiments for reproducibility  
+- Integrated training and evaluation loop  
+- Weights & Biases integration for monitoring and comparison  
+- Clean `.gitignore` to exclude large files, caches, and secrets  
+
+---
+
+## Installation
+Clone the repository and install dependencies:
 
 ```bash
-cd projects/nutrition-table
-```
-
-### 2. Create environment (recommended)
-
-```bash
-python -m venv ../../envs/qwen
-source ../../envs/qwen/bin/activate
-```
-
-### 3. Install dependencies
-
-```bash
-pip install --upgrade pip
+git clone https://github.com/MKDehdashti/qwen_runpod.git
+cd qwen_runpod
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
 ---
 
-## ▶️ Training
+## Dataset
+This project uses a custom nutrition table dataset containing images annotated with bounding boxes around table regions.  
 
-### Stage 1 (Vision only)
+- **Format**: COCO-style JSON annotations with bounding boxes  
+- **Splits**: Training and validation sets handled automatically by the pipeline  
+- **Preprocessing**: Image resizing, tokenizer alignment, and batching managed in `train.py`  
 
+---
+
+## Training & Evaluation
+Training and evaluation are both handled by the main script.
+
+Run a full experiment:
 ```bash
-accelerate launch --mixed_precision=bf16 src/train.py --config configs/stage1.yaml
+python src/train.py --config configs/exp1.yaml
 ```
 
-### Stage 2 (Vision + Language)
-
+For quick debugging:
 ```bash
-accelerate launch --mixed_precision=bf16 src/train.py --config configs/stage2.yaml
+python src/train.py --config configs/exp1_debug.yaml
 ```
 
 ---
 
-## 📊 Evaluation
+## Metrics
+The pipeline automatically evaluates during training and logs results to W&B, including:  
+- Mean IoU  
+- Precision, Recall, F1-score  
+- mAP@0.5, mAP@0.75  
+- Precision–recall curves  
 
-Run evaluation after training:
+Evaluation outputs are also saved locally under `outputs/`.
 
+---
+
+## Notes
+- Large files and directories (`wandb/`, `runs/`, `outputs/`, `models/`, `.venv/`) are excluded via `.gitignore`.  
+- Use Git branches (e.g., `exp/lora_fc`, `exp/data_balance`) to organize experiment variations.  
+- W&B dashboards are recommended for comparing experiments across runs.  
+
+---
+
+## Requirements
+- Python ≥ 3.9  
+- PyTorch ≥ 2.1  
+- Hugging Face: transformers, datasets, accelerate, peft, trl  
+- Weights & Biases (wandb)  
+
+Install all dependencies with:
 ```bash
-python src/eval_utils.py --config configs/eval.yaml
+pip install -r requirements.txt
 ```
 
 ---
 
-## 📂 Project Structure
-
-```
-nutrition-table/
-├─ configs/              # configs for training, env, eval
-│   ├─ default.env
-│   ├─ stage1.yaml
-│   ├─ stage2.yaml
-├─ src/                  # source code
-│   ├─ train.py
-│   ├─ data_utils.py
-│   ├─ model_utils.py
-│   ├─ eval_utils.py
-│   └─ viz_utils.py
-├─ runs/                 # training outputs & checkpoints
-├─ requirements.txt      # dependencies
-├─ Notes.md              # personal notes & results
-└─ README.md             # this file
-```
+## Roadmap
+- [ ] Add advanced loss functions (Dice, IoU)  
+- [ ] Extend LoRA coverage to vision MLP layers  
+- [ ] Implement balanced sampling for rare and small objects  
+- [ ] Provide dataset preprocessing scripts  
 
 ---
 
-## 📊 Results
-
-### Stage 1
-
-| Variant             | Mean IoU Before | Mean IoU After | Loss | Eval Loss | Runtime (s) | Notes       |
-| ------------------- | --------------- | -------------- | ---- | --------- | ----------- | ----------- |
-| Vision blocks 20-23 | 0.3309          | 0.3654         | 2.04 | 0.27      | 3200        | Best so far |
-| Whole vision        | 0.3309          | 0.3421         | 2.30 | 0.30      | 3100        | Worse       |
-
-### Stage 2
-
-| Variant         | Mean IoU Before | Mean IoU After | Loss | Eval Loss | Runtime (s) | Notes |
-| --------------- | --------------- | -------------- | ---- | --------- | ----------- | ----- |
-| Stage2 baseline | 0.3309          | 0.3547         | 2.02 | 0.27      | 3179        |       |
+## License
+This repository is distributed under the **MIT License**.  
+It fine-tunes **Qwen-VL**, developed by **Alibaba Cloud**, which is available under the [Apache-2.0 License](https://huggingface.co/Qwen).  
 
 ---
 
-## 📝 Observations
-
-* Training loss plateaued after epoch 2 → try lower LR or fewer epochs.
-* Stage 2 improves slightly but runtime increases.
-* Possible next step: test with connectors instead of whole vision fine-tuning.
-
----
-
-## 📌 To-Do / Next Experiments
-
-* [ ] Try different LoRA target modules.
-* [ ] Run with 5 epochs instead of 3.
-* [ ] Add alternative collator masking.
-* [ ] Compare strict vs optimistic IoU evaluation.
+## Author
+Maintained by [MKDehdashti](https://github.com/MKDehdashti).  
+Contributions and feedback are welcome.
