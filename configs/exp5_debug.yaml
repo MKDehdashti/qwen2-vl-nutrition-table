@@ -1,0 +1,47 @@
+experiment: exp5_debug
+
+# global debug overrides
+debug:
+  dataset_subset: 8          # number of samples to use
+  wandb_suffix: "-debug"
+  wandb_tags: ["debug"]
+  model_id: "Qwen/Qwen2-VL-2B-Instruct"   # smaller model for debug (7B for real run)
+  min_pixels: 112            # processor min resolution
+  max_pixels: 224            # processor max resolution
+  max_seq_length: 128        # shorter context
+  max_steps: 5               # cut training short (overrides epochs if set >0)
+  eval_strategy: "none"        # disable eval during training for speed
+  batch_size: 1              # override for debug
+  grad_accum_steps: 1
+  skip_custom_eval: true
+
+stages:
+  - &vision1
+    name: vision1_exp5_debug
+    batch_size: 1
+    grad_accum_steps: 1
+    lr: 0.0001
+    epochs: 0.2
+    lora_r: 2
+    lora_alpha: 4
+    lora_dropout: 0.1
+    regex_targets:
+      - "visual\\.blocks\\.\\d+\\.attn\\.qkv"
+      - "visual\\.blocks\\.\\d+\\.attn\\.proj"
+    resume_strategy: "checkpoint"
+
+  - &vision2
+    name: vision2_exp5_debug
+    batch_size: 1
+    grad_accum_steps: 1
+    lr: 0.0001
+    epochs: 0.2
+    lora_r: 2
+    lora_alpha: 4
+    lora_dropout: 0.1
+    regex_targets:
+      - "visual\\.blocks\\.\\d+\\.attn\\.qkv"
+      - "visual\\.blocks\\.\\d+\\.attn\\.proj"
+      - "self_attn\\.q_proj"
+      - "self_attn\\.v_proj"
+    resume_strategy: "stage"

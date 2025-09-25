@@ -1,0 +1,36 @@
+experiment: exp3_debug
+
+stages:
+  - &vision1
+    name: vision1_debug
+    batch_size: 2
+    grad_accum_steps: 1
+    lr: 0.0001
+    epochs: 1
+    lora_r: 4
+    lora_alpha: 8
+    lora_dropout: 0.1
+    regex_targets:
+      - "visual\\.blocks\\.\\d+\\.attn\\.qkv"
+      - "visual\\.blocks\\.\\d+\\.attn\\.proj"
+      # - "visual\\.patch_embed\\.proj"
+
+  - &vision2
+    name: vision2_debug
+    batch_size: 2
+    grad_accum_steps: 1
+    lr: 0.0001
+    epochs: 1
+    lora_r: 4
+    lora_alpha: 8
+    lora_dropout: 0.1
+    regex_targets:
+      - "visual\\.blocks\\.\\d+\\.attn\\.qkv"
+      - "visual\\.blocks\\.\\d+\\.attn\\.proj"
+      # - "visual\\.patch_embed\\.proj"
+
+
+debug:
+  dataset_subset: 32
+  wandb_suffix: "-debug"
+  wandb_tags: ["debug"]

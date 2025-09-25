@@ -1,0 +1,30 @@
+experiment: exp3
+
+stages:
+  - &vision1
+    name: vision1
+    batch_size: 4
+    grad_accum_steps: 8
+    lr: 0.00005
+    epochs: 1
+    lora_r: 8
+    lora_alpha: 16
+    lora_dropout: 0.05
+    regex_targets:
+      - "visual\\.blocks\\.\\d+\\.attn\\.qkv"
+      - "visual\\.blocks\\.\\d+\\.attn\\.proj"
+      # - "visual\\.patch_embed\\.proj"
+
+  - &vision2
+    name: vision2
+    batch_size: 4
+    grad_accum_steps: 8
+    lr: 0.00005
+    epochs: 1
+    lora_r: 8
+    lora_alpha: 16
+    lora_dropout: 0.05
+    regex_targets:
+      - "visual\\.blocks\\.\\d+\\.attn\\.qkv"
+      - "visual\\.blocks\\.\\d+\\.attn\\.proj"
+      # - "visual\\.patch_embed\\.proj"

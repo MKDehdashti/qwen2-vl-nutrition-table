@@ -1,14 +1,17 @@
-import os, yaml, torch
+import os, json, yaml, torch
 from datetime import datetime
 from accelerate import PartialState
 from trl import SFTConfig, SFTTrainer
 from peft import LoraConfig
-from data_utils import train_ds, test_ds, collate_fn_consistent
-from model_utils import save, load_model, get_matching_modules
-from eval_utils import run_and_log_eval, test_one
+from dataset.data_utils import train_ds, test_ds
+from dataset.collators import collate_fn
+from model_utils import save, load_model, get_matching_modules, load_processor_fixed
+from eval_utils import evaluate_model
 from wandb_utils import init_wandb, WandBLossCallback
 from cleanup import clean_cache
 from datasets import load_dataset
+from transformers import EarlyStoppingCallback, TrainerCallback
+import wandb
 
 if not torch.cuda.is_available():
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -20,7 +23,6 @@ state = PartialState()
 is_main = state.is_main_process
 
 def get_proj_root():
-    # src/train.py -> go 1 level up = src/, 2 levels up = nutrition-table/
     return os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 def load_config(path):
@@ -30,7 +32,6 @@ def load_config(path):
         raise FileNotFoundError(f"Config file not found: {full_path}")
     with open(full_path) as f:
         return yaml.safe_load(f)
-
 
 def deep_merge(base, override):
     if not isinstance(base, dict) or not isinstance(override, dict):
@@ -43,13 +44,46 @@ def deep_merge(base, override):
             merged[k] = v
     return merged
 
+# --- IoU reporting callback (mean IoU curve) ---
+class IoUEvalCallback(TrainerCallback):
+    def __init__(self, processor, test_ds, cfg, tag="mean_iou", n=50, every_n_steps=200):
+        self.processor = processor
+        self.test_ds = test_ds
+        self.cfg = cfg
+        self.tag = tag
+        self.n = n
+        self.every_n_steps = every_n_steps
+
+    def on_step_end(self, args, state, control, **kwargs):
+        if not state.is_local_process_zero:
+            return control
+        if state.global_step == 0 or state.global_step % self.every_n_steps != 0:
+            return control
+        model = kwargs["model"]
+        metrics = evaluate_model(
+            model,
+            n=self.n,
+            strict=True,
+            tag=self.tag,
+            cfg=self.cfg,
+            training_args=args,
+            plot=False,
+        )
+        mean_iou = metrics.get("mean_iou", 0.0)
+        if wandb.run is not None:
+            wandb.log({f"{self.tag}/mean_iou": mean_iou}, step=state.global_step)
+        else:
+            print(f"[no wandb] step {state.global_step} mean_iou={mean_iou:.4f}")
+        return control
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default=os.environ.get("TRAIN_CONFIG"))
-    args, unknown = parser.parse_known_args()
+    args, _ = parser.parse_known_args()
     if not args.config:
         raise SystemExit("Missing config. Pass --config or set TRAIN_CONFIG.")
+
     if "debug" in os.path.basename(args.config):
         base_cfg = load_config("configs/exp1.yaml")
         override_cfg = load_config(args.config)
@@ -72,113 +106,108 @@ if __name__ == "__main__":
     runs_root = os.path.join(proj_root, "runs")
     os.makedirs(runs_root, exist_ok=True)
 
-
-    # Use full timestamp (date + hour + minute + second)
-    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_id = datetime.now().strftime("%Y%m%d_%H%M")
     exp_name = cfg["experiment"]
-
-    # Run-specific folder
     run_dir = os.path.join(runs_root, f"{exp_name}_{run_id}")
     os.makedirs(run_dir, exist_ok=True)
 
-    # Redirect W&B logs here
     os.environ["WANDB_DIR"] = os.path.join(run_dir, "wandb")
     os.makedirs(os.environ["WANDB_DIR"], exist_ok=True)
 
-    if is_main:
-        import wandb
-        wandb.init(project="nutrition-table-vl", group=f"{exp_name}_{run_id}", job_type="meta",
-                   name=f"meta_{exp_name}_{run_id}", config=cfg)
-        wandb.finish()
+    processor = load_processor_fixed(model_id=cfg["model_id"])
+    prev_dir = None
 
-    if is_main:
-        init_wandb(run_id, {}, None, stage_name="baseline", exp_name=exp_name)
-        print("\n=== Baseline Evaluation ===")
-        baseline_metrics = run_and_log_eval("baseline", tag="baseline",
-                                            quantized=True, use_adapters=False, from_dir=None)
-        m, p = load_model(dtype=torch.bfloat16, quantized=True, use_adapters=False)
-        test_one(m, p, idx=20, tag="baseline", split="val", out_dir=run_dir)
-        del m, p; torch.cuda.empty_cache()
-        import wandb; wandb.finish()
-
-    # === Stage loop ===
-    for stage_cfg in cfg["stages"]:
-        name = stage_cfg["name"]
-        regex_targets = stage_cfg["regex_targets"]
-
-        # Stage-specific folder
+    for stage_idx, stage in enumerate(cfg["stages"]):
+        name = stage["name"]
+        regex_targets = stage["regex_targets"]
         out_dir = os.path.join(run_dir, name)
         os.makedirs(out_dir, exist_ok=True)
 
         training_args = SFTConfig(
             output_dir=out_dir,
-            num_train_epochs=stage_cfg["epochs"],
-            per_device_train_batch_size=stage_cfg["batch_size"],
-            gradient_accumulation_steps=stage_cfg["grad_accum_steps"],
-            learning_rate=float(stage_cfg["lr"]),
+            num_train_epochs=stage["epochs"],
+            per_device_train_batch_size=stage["batch_size"],
+            per_device_eval_batch_size=stage["batch_size"],
+            gradient_accumulation_steps=stage["grad_accum_steps"],
+            learning_rate=float(stage["lr"]),
             gradient_checkpointing=True,
             optim="adamw_torch_fused",
             bf16=True,
             tf32=True,
             report_to="wandb",
-            logging_steps=10,
-            eval_steps=10,
+            logging_steps=5,
             eval_strategy="steps",
+            eval_steps=stage.get("eval_steps", 20),
             save_strategy="steps",
-            save_steps=100,
-            save_total_limit=3,
+            save_steps=stage.get("save_steps", 20),
+            save_total_limit=2,
+            load_best_model_at_end=True,
+            metric_for_best_model="eval_loss",
+            greater_is_better=False,
             max_grad_norm=0.3,
             warmup_ratio=0.03,
+            lr_scheduler_type=cfg.get("lr_scheduler_type", "linear"),
             gradient_checkpointing_kwargs={"use_reentrant": False},
-            dataset_text_field="",
-            dataset_kwargs={"skip_prepare_dataset": True}
         )
         training_args.remove_unused_columns = False
 
+        clean_base, _ = load_model(model_id=cfg["model_id"], dtype=torch.bfloat16,
+                                   use_adapters=False, cfg=cfg)
         peft_cfg = LoraConfig(
-            r=stage_cfg["lora_r"],
-            lora_alpha=stage_cfg["lora_alpha"],
-            lora_dropout=stage_cfg["lora_dropout"],
+            r=stage["lora_r"],
+            lora_alpha=stage["lora_alpha"],
+            lora_dropout=stage["lora_dropout"],
             bias="none",
             task_type="CAUSAL_LM",
-            target_modules=get_matching_modules(
-                load_model(dtype=torch.bfloat16, quantized=True, use_adapters=False)[0],
-                regex_targets
-            )
+            target_modules=get_matching_modules(clean_base, regex_targets)
         )
+        del clean_base; torch.cuda.empty_cache()
+
+        if stage_idx == 0:
+            print(f"\n=== Stage: {name} (starting from base model) ===")
+            base_model, _ = load_model(model_id=cfg["model_id"], dtype=torch.bfloat16,
+                                       use_adapters=False, cfg=cfg)
+        else:
+            print(f"\n=== Stage: {name} (starting from adapters of {prev_dir}) ===")
+            base_model, _ = load_model(model_id=cfg["model_id"], dtype=torch.bfloat16,
+                                       use_adapters=True, from_dir=prev_dir, cfg=cfg)
 
         if is_main:
             init_wandb(run_id, training_args, peft_cfg, stage_name=name, exp_name=exp_name)
 
-        print(f"\n=== Stage: {name} ===")
-        base_model, proc = load_model(dtype=torch.bfloat16, quantized=True, use_adapters=False, from_dir=out_dir)
         base_model.enable_input_require_grads()
         base_model.config.use_cache = False
+
+        collator_cfg = cfg.get("collator", {})
+        numeric_only = bool(collator_cfg.get("numeric_only", False))
 
         trainer = SFTTrainer(
             model=base_model,
             args=training_args,
             train_dataset=train_ds,
             eval_dataset=test_ds,
-            data_collator=lambda ex: collate_fn_consistent(ex, proc),
+            data_collator=lambda ex: collate_fn(ex, processor, numeric_only=numeric_only),
             peft_config=peft_cfg,
-            callbacks=[WandBLossCallback()],
+            callbacks=[
+                WandBLossCallback(),
+                EarlyStoppingCallback(early_stopping_patience=3, early_stopping_threshold=0.001),
+                IoUEvalCallback(processor, test_ds, cfg, every_n_steps=200),
+            ]
         )
+
         trainer.train()
-        save(trainer, proc, training_args)
+        eval_results = trainer.evaluate()
+        print(f"📊 Trainer eval results: {eval_results}")
 
-        eval_metrics = run_and_log_eval(name, tag=f"post_{name}",
-                                        quantized=True, use_adapters=True,
-                                        from_dir=out_dir, training_args=training_args)
-        m, p = load_model(dtype=torch.bfloat16, quantized=True, use_adapters=True, from_dir=out_dir)
-        test_one(m, p, idx=20, tag=f"post_{name}", split="val",
-                 out_dir=out_dir, training_args=training_args)
-        del m, p; torch.cuda.empty_cache()
+        save(trainer, None, training_args)  # only save adapters + config
 
+        del base_model; torch.cuda.empty_cache()
         clean_cache(deep=False)
 
         if is_main:
-            import wandb; wandb.finish()
+            wandb.finish()
+
+        prev_dir = out_dir
 
     if is_main:
-        print("✅ All stages complete")
+        print("✅ All stages complete (adapters only, no merge)")

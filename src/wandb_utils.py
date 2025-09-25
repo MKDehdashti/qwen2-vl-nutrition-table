@@ -29,7 +29,6 @@ wandb_token = os.getenv("WANDB_API_KEY")
 if wandb_token:
     wandb.login(key=wandb_token)
 
-
 class WandBLossCallback(TrainerCallback):
     def on_log(self, args, state, control, logs=None, **kwargs):
         if not state.is_world_process_zero:

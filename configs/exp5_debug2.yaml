@@ -1,0 +1,53 @@
+experiment: exp_best_debug
+
+model_id: "Qwen/Qwen2-VL-2B-Instruct"
+
+debug:
+  dataset_subset: 8
+  wandb_suffix: "-debug"
+  wandb_tags: ["debug"]
+  min_pixels: 112
+  max_pixels: 224
+  max_seq_length: 128
+  max_steps: 5
+  eval_strategy: "none"
+  batch_size: 1
+  grad_accum_steps: 1
+  skip_custom_eval: true
+
+stages:
+  - &vision_debug
+    name: vision_debug
+    batch_size: 1
+    grad_accum_steps: 1
+    lr: 0.0001
+    epochs: 0.1
+    lora_r: 2
+    lora_alpha: 4
+    lora_dropout: 0.1
+    regex_targets:
+      - "visual\\.blocks\\.\\d+\\.attn\\.qkv"
+      - "visual\\.blocks\\.\\d+\\.attn\\.proj"
+      - "visual\\.blocks\\.\\d+\\.mlp\\.fc1"
+      - "visual\\.blocks\\.\\d+\\.mlp\\.fc2"
+    resume_strategy: "checkpoint"
+
+  - &lang_vision_debug
+    name: lang_vision_debug
+    batch_size: 1
+    grad_accum_steps: 1
+    lr: 0.0001
+    epochs: 0.1
+    lora_r: 2
+    lora_alpha: 4
+    lora_dropout: 0.1
+    regex_targets:
+      - "visual\\.blocks\\.\\d+\\.attn\\.qkv"
+      - "visual\\.blocks\\.\\d+\\.attn\\.proj"
+      - "visual\\.blocks\\.\\d+\\.mlp\\.fc1"
+      - "visual\\.blocks\\.\\d+\\.mlp\\.fc2"
+      - "self_attn\\.q_proj"
+      - "self_attn\\.v_proj"
+      - "mlp\\.fc1"
+      - "mlp\\.fc2"
+    resume_strategy: "stage"
