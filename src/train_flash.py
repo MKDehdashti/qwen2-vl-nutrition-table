@@ -5,13 +5,14 @@ from trl import SFTConfig, SFTTrainer
 from peft import LoraConfig
 from dataset.data_utils import train_ds, test_ds
 from dataset.collators import collate_fn
-from model_utils import save, load_model, get_matching_modules, load_processor_fixed
-from eval_utils import evaluate_model
+from model_utils_flash import save, load_model, get_matching_modules, load_processor_fixed
+from eval_utils import run_and_log_eval
 from wandb_utils import init_wandb, WandBLossCallback
 from cleanup import clean_cache
 from datasets import load_dataset
 from transformers import EarlyStoppingCallback, TrainerCallback
 import wandb
+
 
 if not torch.cuda.is_available():
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -22,8 +23,10 @@ else:
 state = PartialState()
 is_main = state.is_main_process
 
+
 def get_proj_root():
     return os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
 
 def load_config(path):
     proj_root = get_proj_root()
@@ -32,6 +35,7 @@ def load_config(path):
         raise FileNotFoundError(f"Config file not found: {full_path}")
     with open(full_path) as f:
         return yaml.safe_load(f)
+
 
 def deep_merge(base, override):
     if not isinstance(base, dict) or not isinstance(override, dict):
@@ -44,51 +48,68 @@ def deep_merge(base, override):
             merged[k] = v
     return merged
 
-# --- IoU reporting callback (mean IoU curve) ---
+
+# --- IoU reporting callback (now using eval_utils) ---
 class IoUEvalCallback(TrainerCallback):
-    def __init__(self, processor, test_ds, cfg, tag="mean_iou", n=50, every_n_steps=200):
-        self.processor = processor
-        self.test_ds = test_ds
+    def __init__(self, cfg, tag="mean_iou", n=50, every_n_steps=100):
         self.cfg = cfg
         self.tag = tag
         self.n = n
         self.every_n_steps = every_n_steps
 
+    def on_train_begin(self, args, state, control, **kwargs):
+        if state.is_local_process_zero:
+            run_and_log_eval(
+                stage_name="start",
+                tag=f"{self.tag}_start",
+                n=self.n,
+                from_dir=args.output_dir,
+                training_args=args,
+                step=state.global_step,
+                cfg=self.cfg,
+            )
+        return control
+
     def on_step_end(self, args, state, control, **kwargs):
         if not state.is_local_process_zero:
             return control
-        if state.global_step == 0 or state.global_step % self.every_n_steps != 0:
-            return control
-        model = kwargs["model"]
-        metrics = evaluate_model(
-            model,
-            n=self.n,
-            strict=True,
-            tag=self.tag,
-            cfg=self.cfg,
-            training_args=args,
-            plot=False,
-        )
-        mean_iou = metrics.get("mean_iou", 0.0)
-        if wandb.run is not None:
-            wandb.log({f"{self.tag}/mean_iou": mean_iou}, step=state.global_step)
-        else:
-            print(f"[no wandb] step {state.global_step} mean_iou={mean_iou:.4f}")
+        if state.global_step % self.every_n_steps == 0 and state.global_step > 0:
+            run_and_log_eval(
+                stage_name="step",
+                tag=f"{self.tag}_step",
+                n=self.n,
+                from_dir=args.output_dir,
+                training_args=args,
+                step=state.global_step,
+                cfg=self.cfg,
+            )
         return control
 
-# --- compute_metrics wrapper (closure style) ---
+    def on_train_end(self, args, state, control, **kwargs):
+        if state.is_local_process_zero:
+            run_and_log_eval(
+                stage_name="end",
+                tag=f"{self.tag}_end",
+                n=self.n,
+                from_dir=args.output_dir,
+                training_args=args,
+                step=state.global_step,
+                cfg=self.cfg,
+            )
+        return control
+
+
 def make_compute_metrics(model, cfg, training_args):
     def compute_metrics(eval_pred):
-        metrics = evaluate_model(
-            model,
-            n=50,
-            strict=True,
+        metrics = run_and_log_eval(
+            stage_name="compute_metrics",
             tag="eval",
-            cfg=cfg,
+            n=50,
+            from_dir=training_args.output_dir,
             training_args=training_args,
-            plot=False,
+            cfg=cfg,
         )
-        return {"mean_iou": metrics.get("mean_iou", 0.0)}
+        return {"mean_iou": metrics["adapters"].get("mean_iou", 0.0)}
     return compute_metrics
 
 
@@ -212,7 +233,7 @@ if __name__ == "__main__":
             callbacks=[
                 WandBLossCallback(),
                 EarlyStoppingCallback(early_stopping_patience=3, early_stopping_threshold=0.001),
-                IoUEvalCallback(processor, test_ds, cfg, every_n_steps=200),
+                IoUEvalCallback(cfg, every_n_steps=100),
             ],
             compute_metrics=make_compute_metrics(base_model, cfg, training_args),
         )

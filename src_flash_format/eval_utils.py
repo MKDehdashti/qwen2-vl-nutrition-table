@@ -1,9 +1,9 @@
-import os, torch, wandb, argparse
+import os, torch, wandb, argparse, json
 import matplotlib.pyplot as plt
 from torchvision.ops import box_iou
-from viz_utils import run_inference_strict, draw_box_0to1000
+from viz_utils_format_data import run_inference_strict, draw_box_0to1000
 from model_utils_flash import load_model, load_processor_fixed
-from dataset.data_utils import train_ds, test_ds
+from dataset.data_utils_format_data import train_ds, test_ds
 
 
 def test_one(model, idx=20, tag="baseline", split="val", out_dir=None,
@@ -31,7 +31,8 @@ def test_one(model, idx=20, tag="baseline", split="val", out_dir=None,
 
 def evaluate_model(model, n=50, strict=True, iou_thresholds=None,
                    plot=True, tag="baseline", out_dir=None,
-                   training_args=None, cfg=None, print_iou_per_sample=False):
+                   training_args=None, cfg=None,
+                   print_iou_per_sample=False, save_per_sample=False):
     if iou_thresholds is None:
         iou_thresholds = [0.5, 0.75]
     infer_dtype = getattr(model, "dtype", torch.float32)
@@ -42,8 +43,7 @@ def evaluate_model(model, n=50, strict=True, iou_thresholds=None,
         max_pixels=cfg.get("debug", {}).get("max_pixels", 900 * 28 * 28) if cfg else 900 * 28 * 28,
     )
 
-    def _to_xyxy(b): 
-        # dataset = (y0, x0, y1, x1) → convert to (x0, y0, x1, y1)
+    def _to_xyxy(b):
         return [b[1], b[0], b[3], b[2]]
 
     def _scale(boxes):
@@ -56,6 +56,8 @@ def evaluate_model(model, n=50, strict=True, iou_thresholds=None,
     per_image_ious = []
     all_tp, all_fp, all_fn = {t: 0 for t in iou_thresholds}, {t: 0 for t in iou_thresholds}, {t: 0 for t in iou_thresholds}
     n = min(n, len(test_ds))
+
+    per_sample_logs = []
 
     for idx in range(n):
         ex = test_ds[idx]
@@ -71,20 +73,19 @@ def evaluate_model(model, n=50, strict=True, iou_thresholds=None,
         if not pred_boxes:
             continue
 
-        # swap truth only
         gt_swapped = [_to_xyxy(b) for b in gt_boxes]
 
         gt_t = torch.tensor(gt_swapped, dtype=torch.float32, device=dev)
         pr_t = torch.tensor(pred_boxes, dtype=torch.float32, device=dev)
         iou_mat = box_iou(gt_t, pr_t).cpu()
 
-        # 🆕 Debug printing
         print(f"Current Sample Index: {idx} out of {n}")
         print("pred:", pred_boxes, "truth:", gt_swapped)
         if print_iou_per_sample:
             print("IoU matrix:", iou_mat.tolist())
 
-        # mean IoU
+        sample_entry = {"idx": idx, "pred": pred_boxes, "truth": gt_swapped, "ious": iou_mat.tolist()}
+
         if strict:
             used_preds, matched = set(), []
             for gi in range(iou_mat.size(0)):
@@ -95,13 +96,18 @@ def evaluate_model(model, n=50, strict=True, iou_thresholds=None,
                     used_preds.add(best_pi)
                     matched.append(best_iou)
             if matched:
-                per_image_ious.append(sum(matched) / len(matched))
+                mean_sample_iou = sum(matched) / len(matched)
+                per_image_ious.append(mean_sample_iou)
+                sample_entry["mean_iou"] = mean_sample_iou
         else:
             matched = [row.max().item() for row in iou_mat]
             if matched:
-                per_image_ious.append(sum(matched) / len(matched))
+                mean_sample_iou = sum(matched) / len(matched)
+                per_image_ious.append(mean_sample_iou)
+                sample_entry["mean_iou"] = mean_sample_iou
 
-        # precision / recall
+        per_sample_logs.append(sample_entry)
+
         for thr in iou_thresholds:
             tp, fp = 0, 0
             matched_gt = set()
@@ -150,13 +156,22 @@ def evaluate_model(model, n=50, strict=True, iou_thresholds=None,
         metrics["pr_curve_path"] = save_path
         print(f"📊 Precision/Recall curve saved to {save_path}")
 
+    if save_per_sample:
+        save_dir = out_dir or getattr(training_args, "output_dir", "./outputs")
+        os.makedirs(save_dir, exist_ok=True)
+        log_path = os.path.join(save_dir, f"per_sample_iou_{tag}.json")
+        with open(log_path, "w") as f:
+            json.dump(per_sample_logs, f, indent=2)
+        metrics["per_sample_log_path"] = log_path
+        print(f"📝 Per-sample IoU log saved to {log_path}")
+
     print(f"📊 {tag} metrics:", metrics)
     return metrics
 
 
 def run_and_log_eval(stage_name, tag="eval", n=50, strict=True,
                      from_dir=None, training_args=None, step=None, cfg=None,
-                     print_iou_per_sample=False):
+                     print_iou_per_sample=False, save_per_sample=False):
     if not cfg or "model_id" not in cfg:
         raise ValueError("Config must include 'model_id'")
 
@@ -170,9 +185,10 @@ def run_and_log_eval(stage_name, tag="eval", n=50, strict=True,
     metrics = evaluate_model(model, n=n, strict=strict,
                              tag=tag, out_dir=from_dir,
                              training_args=training_args, cfg=cfg,
-                             print_iou_per_sample=print_iou_per_sample)
+                             print_iou_per_sample=print_iou_per_sample,
+                             save_per_sample=save_per_sample)
 
-    log_dict = {f"{tag}/{k}": v for k, v in metrics.items() if k != "pr_curve_path"}
+    log_dict = {f"{tag}/{k}": v for k, v in metrics.items() if k not in ["pr_curve_path", "per_sample_log_path"]}
     if "pr_curve_path" in metrics:
         log_dict[f"{tag}/pr_curve"] = wandb.Image(metrics["pr_curve_path"])
     if wandb.run is not None:
@@ -185,7 +201,6 @@ def run_and_log_eval(stage_name, tag="eval", n=50, strict=True,
     return {"adapters": metrics}
 
 
-# === CLI for standalone eval ===
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--from_dir", type=str, required=True, help="Checkpoint dir")
@@ -193,6 +208,7 @@ if __name__ == "__main__":
     parser.add_argument("--tag", type=str, default="manual_eval", help="Eval tag")
     parser.add_argument("--n", type=int, default=50, help="Number of samples")
     parser.add_argument("--print_iou_per_sample", action="store_true", help="Print IoU matrix for each sample")
+    parser.add_argument("--save_per_sample", action="store_true", help="Save per-sample IoU logs to JSON")
     args = parser.parse_args()
 
     import yaml
@@ -205,5 +221,6 @@ if __name__ == "__main__":
         n=args.n,
         from_dir=args.from_dir,
         cfg=cfg,
-        print_iou_per_sample=args.print_iou_per_sample
+        print_iou_per_sample=args.print_iou_per_sample,
+        save_per_sample=args.save_per_sample
     )

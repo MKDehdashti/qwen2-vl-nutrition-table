@@ -1,0 +1,45 @@
+experiment: exp1-3_flash # exp11 with just lang-vision or 1-2 with flash and larger pixel and sequence size
+
+model_id: "Qwen/Qwen2-VL-7B-Instruct"
+
+min_pixels: 65536
+max_pixels: 1572864
+max_seq_length: 2048
+warmup_ratio: 0.03
+
+eval_strategy: "steps"
+eval_steps: 50
+save_strategy: "steps"
+save_steps: 50
+logging_steps: 10
+
+stages:
+  # - &vision
+  #   name: vision
+  #   batch_size: 4
+  #   grad_accum_steps: 8
+  #   lr: 0.00005
+  #   epochs: 5
+  #   lora_r: 8
+  #   lora_alpha: 16
+  #   lora_dropout: 0.05
+  #   regex_targets:
+  #     - "visual\\.blocks\\.\\d+\\.attn\\.qkv"
+  #     - "visual\\.blocks\\.\\d+\\.attn\\.proj"
+  #     # - "visual\\.patch_embed\\.proj"
+
+  - &lang_vision
+    name: exp1-3_flash_lang_vision
+    batch_size: 2
+    grad_accum_steps: 8
+    lr: 0.0001
+    epochs: 15
+    lora_r: 16
+    lora_alpha: 32
+    lora_dropout: 0.1
+    regex_targets:
+      - "visual\\.blocks\\.\\d+\\.attn\\.qkv"
+      - "visual\\.blocks\\.\\d+\\.attn\\.proj"
+      # - "visual\\.patch_embed\\.proj"
+      - "self_attn\\.q_proj"
+      - "self_attn\\.v_proj"

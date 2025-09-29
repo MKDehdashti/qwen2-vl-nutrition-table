@@ -3,8 +3,8 @@ from datetime import datetime
 from accelerate import PartialState
 from trl import SFTConfig, SFTTrainer
 from peft import LoraConfig
-from dataset.data_utils import train_ds, test_ds
-from dataset.collators import collate_fn
+from dataset_flash_format.data_utils import train_ds, test_ds
+from dataset_flash_format.collators import collate_fn
 from model_utils import save, load_model, get_matching_modules, load_processor_fixed
 from eval_utils import evaluate_model
 from wandb_utils import init_wandb, WandBLossCallback
@@ -76,7 +76,7 @@ class IoUEvalCallback(TrainerCallback):
             print(f"[no wandb] step {state.global_step} mean_iou={mean_iou:.4f}")
         return control
 
-# --- compute_metrics wrapper (closure style) ---
+# --- compute_metrics wrapper so trainer.evaluate() returns mean_iou ---
 def make_compute_metrics(model, cfg, training_args):
     def compute_metrics(eval_pred):
         metrics = evaluate_model(
@@ -90,7 +90,6 @@ def make_compute_metrics(model, cfg, training_args):
         )
         return {"mean_iou": metrics.get("mean_iou", 0.0)}
     return compute_metrics
-
 
 if __name__ == "__main__":
     import argparse
@@ -171,6 +170,7 @@ if __name__ == "__main__":
             prediction_loss_only=True,
         )
         training_args.remove_unused_columns = False
+
 
         clean_base, _ = load_model(model_id=cfg["model_id"], dtype=torch.bfloat16,
                                    use_adapters=False, cfg=cfg)

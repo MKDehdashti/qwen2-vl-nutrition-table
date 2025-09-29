@@ -11,7 +11,10 @@ source /workspace/projects/nutrition-table/.venv/bin/activate
   accelerate launch --num_processes=1 --mixed_precision=bf16 src/train.py --config configs/exp7_2.yaml
 
 
-  python src/train.py --config configs/exp5_debug.yaml
+  python src/train_flash.py --config configs/exp1-3.yaml
+    python src_flash_format/train.py --config configs/exp9_debug.yaml
+    python src_flash_format/train.py --config configs/exp10.yaml
+
 
   python src/cleanup.py
 
@@ -23,6 +26,33 @@ source /workspace/projects/nutrition-table/.venv/bin/activate
 
  python -u src/train.py --config configs/exp1_debug.yaml
  python -u src/train.py --config con(.venv) root@8791c11f9ca0:/workspace#  accelerate launch --mixed_precision=bf16 /workspace/projects/nutrition-table/src/train.py --config configs/exp1.yaml
+
+ python src/eval_utils.py \
+  --from_dir runs/exp9_joint_training/checkpoint-220 \
+  --config configs/exp9.yaml \
+  --tag strict_eval \
+  --n 123
+
+  python src/eval_utils.py \
+  --from_dir runs/exp10_joint_training/checkpoint-200 \
+  --config configs/exp10.yaml \
+  --tag strict_eval_exp10 \
+  --n 123 \
+  --print_iou_per_sample
+
+python src/eval_utils.py \
+  --from_dir runs/exp1-2_20250925_1837/exp1-2_lang_vision/checkpoint-400 \
+  --config configs/exp1-2.yaml \
+  --tag strict_eval_flash \
+  --n 123 \
+  --print_iou_per_sample
+
+
+python src/eval_loose.py \
+  --model_id Qwen/Qwen2-VL-7B-Instruct \
+  --from_dir runs/exp9_joint_training/checkpoint-220 \
+  --n 123
+
 The following values were not passed to `accelerate launch` and had defaults used instead:
         `--num_processes` was set to a value of `1`
         `--num_machines` was set to a value of `1`

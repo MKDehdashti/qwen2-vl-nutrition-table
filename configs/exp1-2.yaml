@@ -1,0 +1,34 @@
+experiment: exp1-2 # exp1 with just lang-vision
+
+model_id: "Qwen/Qwen2-VL-7B-Instruct"
+
+stages:
+  # - &vision
+  #   name: vision
+  #   batch_size: 4
+  #   grad_accum_steps: 8
+  #   lr: 0.00005
+  #   epochs: 5
+  #   lora_r: 8
+  #   lora_alpha: 16
+  #   lora_dropout: 0.05
+  #   regex_targets:
+  #     - "visual\\.blocks\\.\\d+\\.attn\\.qkv"
+  #     - "visual\\.blocks\\.\\d+\\.attn\\.proj"
+  #     # - "visual\\.patch_embed\\.proj"
+
+  - &lang_vision
+    name: exp1-2_lang_vision
+    batch_size: 2
+    grad_accum_steps: 8
+    lr: 0.0001
+    epochs: 20
+    lora_r: 8
+    lora_alpha: 16
+    lora_dropout: 0.05
+    regex_targets:
+      - "visual\\.blocks\\.\\d+\\.attn\\.qkv"
+      - "visual\\.blocks\\.\\d+\\.attn\\.proj"
+      # - "visual\\.patch_embed\\.proj"
+      - "self_attn\\.q_proj"
+      - "self_attn\\.v_proj"

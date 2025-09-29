@@ -4,8 +4,30 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from qwen_vl_utils import process_vision_info
-from dataset.data_utils import build_messages, train_ds, test_ds
-from model_utils_flash import load_model, load_processor_fixed
+from dataset_flash_format.data_utils import build_messages, train_ds, test_ds
+from model_utils import load_model, load_processor_fixed
+
+def parse_bboxes_from_output(text):
+    """
+    Extract bounding boxes from model output.
+    Supports both Qwen-style <|box_start|>...<|box_end|> and plain coordinates.
+    Returns list of [x0,y0,x1,y1] with 0..1000 coordinates.
+    """
+    bboxes = []
+    tag_boxes = re.findall(
+        r"<\|box_start\|>\s*\((\d+),(\d+)\),\((\d+),(\d+)\)\s*<\|box_end\|>", text
+    )
+    for x0, y0, x1, y1 in tag_boxes:
+        bboxes.append([int(x0), int(y0), int(x1), int(y1)])
+
+    if not bboxes:
+        nums = re.findall(r"-?\d+", text)
+        if len(nums) >= 4:
+            # parse in chunks of 4
+            for i in range(0, len(nums) - 3, 4):
+                x0, y0, x1, y1 = map(int, nums[i:i+4])
+                bboxes.append([x0, y0, x1, y1])
+    return bboxes
 
 def run_inference_strict(model, processor, image_or_url, prompt, max_new_tokens=512, dtype=None):
     if dtype is None:
@@ -32,28 +54,28 @@ def run_inference_strict(model, processor, image_or_url, prompt, max_new_tokens=
     trimmed = [o[len(i):] for i, o in zip(inputs.input_ids, out_ids)]
     out = processor.batch_decode(trimmed, skip_special_tokens=False)[0]
 
-    bboxes = []
-    nums = re.findall(r"-?\d+", out)
-    if len(nums) >= 4:
-        x0, y0, x1, y1 = map(int, nums[:4])
-        bboxes.append([x0, y0, x1, y1])
-
+    bboxes = parse_bboxes_from_output(out)
     return {"answer": out, "image": image, "objects": {"bbox": bboxes}}
 
 def draw_box_0to1000(sample, save_path=None):
     img = sample["image"]
     bboxes = sample["objects"]["bbox"]
-    fig, ax = plt.subplots(); ax.imshow(img)
+    fig, ax = plt.subplots()
+    ax.imshow(img)
     for bbox in bboxes:
         x0, y0, x1, y1 = bbox
         y0 /= 1000; x0 /= 1000; y1 /= 1000; x1 /= 1000
         x0_px = x0 * img.width; y0_px = y0 * img.height
         width = (x1 - x0) * img.width; height = (y1 - y0) * img.height
-        rect = patches.Rectangle((x0_px, y0_px), width, height, linewidth=2, edgecolor='red', facecolor='none')
+        rect = patches.Rectangle(
+            (x0_px, y0_px), width, height,
+            linewidth=2, edgecolor='red', facecolor='none'
+        )
         ax.add_patch(rect)
     plt.axis('off')
     if save_path:
-        plt.savefig(save_path, bbox_inches="tight", dpi=150); plt.close(fig)
+        plt.savefig(save_path, bbox_inches="tight", dpi=150)
+        plt.close(fig)
     else:
         plt.show()
 
@@ -97,6 +119,5 @@ if __name__ == "__main__":
     parser.add_argument("--split", type=str, default="val", help="Dataset split")
     parser.add_argument("--prompt", type=str, default="Detect the bounding box of the nutrition table.", help="Custom prompt")
     args = parser.parse_args()
-    # minimal cfg for CLI
     cfg = {"model_id": "Qwen/Qwen2-VL-7B-Instruct"}
     quick_viz(idx=args.idx, from_dir=args.from_dir, split=args.split, prompt=args.prompt, cfg=cfg)
