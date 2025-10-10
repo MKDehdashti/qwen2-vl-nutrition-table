@@ -1,0 +1,70 @@
+experiment: exp10_merge_test
+
+model_id: "Qwen/Qwen2-VL-7B-Instruct"
+
+# image + sequence limits
+min_pixels: 784          # 28x28
+max_pixels: 705600       # 900*28*28
+max_seq_length: 512
+warmup_ratio: 0.03
+
+# logging / checkpointing
+eval_strategy: "steps"
+eval_steps: 80
+save_strategy: "steps"
+save_steps: 80
+logging_steps: 10
+load_best_model_at_end: false
+
+# global toggles
+use_flash: true
+format_data: true
+collator:
+  enabled: true
+  numeric_only: false
+
+# debug controls (moderate subset)
+debug:
+  dataset_subset: 150
+  wandb_suffix: "-mergecheck"
+  wandb_tags: ["mergecheck"]
+
+debug_eval: true
+debug_eval_limit: 5
+
+# optional visualization indices
+precheck_idx: 10
+precheck_split: "train"
+postcheck_idx: 8
+postcheck_split: "val"
+
+# stages ----------------------------------------------------
+stages:
+  # Stage 1 – vision fine-tune (light)
+  - name: exp10_merge_test_vision_last8
+    batch_size: 4
+    grad_accum_steps: 4
+    lr: 5e-5
+    epochs: 2
+    lora_r: 8
+    lora_alpha: 16
+    lora_dropout: 0.1
+    lr_scheduler_type: "constant"
+    regex_targets:
+      - "visual\\.blocks\\.(2[3-9]|30)\\.attn\\.(qkv|proj)"
+
+  # Stage 2 – joint fine-tune (short but complete)
+  - name: exp10_merge_test_joint_short
+    batch_size: 2
+    grad_accum_steps: 8
+    lr: 3e-5
+    epochs: 3
+    lora_r: 16
+    lora_alpha: 32
+    lora_dropout: 0.1
+    lr_scheduler_type: "linear"
+    regex_targets:
+      - "visual\\.blocks\\.\\d+\\.(attn\\.(qkv|proj)|mlp\\.(fc1|fc2))"
+      - "visual\\.merger\\.mlp\\.[02]"
+      - "self_attn\\.(q_proj|k_proj|v_proj|o_proj)"
+      - "mlp\\.(gate_proj|up_proj|down_proj)"

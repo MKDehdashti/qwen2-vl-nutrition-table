@@ -1,3 +1,4 @@
+# src_combo/model_utils
 import os, json, re, torch
 from transformers import Qwen2VLForConditionalGeneration, Qwen2VLProcessor, BitsAndBytesConfig
 os.environ["PEFT_BACKEND"] = "HF"
@@ -32,7 +33,8 @@ def _detect_merged_dir(path):
         return os.path.join(path, "merged")
     return None
 
-def load_model(model_id: str, dtype=torch.float32, quantized=False, use_adapters=False, from_dir=None, cfg=None):
+def load_model(model_id: str, dtype=torch.float32, quantized=False,
+               use_adapters=False, from_dir=None, cfg=None):
     if not model_id:
         raise ValueError("model_id must be provided from YAML config")
 
@@ -54,11 +56,15 @@ def load_model(model_id: str, dtype=torch.float32, quantized=False, use_adapters
             bnb_4bit_compute_dtype=torch.bfloat16
         )
 
+    # ⚡ FlashAttention toggle
+    use_flash = cfg.get("use_flash", False) if cfg else False
+
     base = Qwen2VLForConditionalGeneration.from_pretrained(
         model_src,
         dtype=dtype,
         quantization_config=quant_cfg,
-        device_map={"": PartialState().process_index}
+        device_map={"": PartialState().process_index},
+        attn_implementation="flash_attention_2" if use_flash else "eager",
     )
 
     processor = load_processor_fixed(
@@ -79,7 +85,8 @@ def load_model(model_id: str, dtype=torch.float32, quantized=False, use_adapters
     return model, processor
 
 def merge_adapters_to_base(model_id: str, adapter_dir: str, dtype=torch.bfloat16):
-    base_with_adapters, _ = load_model(model_id=model_id, dtype=dtype, use_adapters=True, from_dir=adapter_dir)
+    base_with_adapters, _ = load_model(model_id=model_id, dtype=dtype,
+                                       use_adapters=True, from_dir=adapter_dir)
     if not isinstance(base_with_adapters, PeftModel):
         raise ValueError(f"No adapters to merge at {adapter_dir}")
     merged = base_with_adapters.merge_and_unload()

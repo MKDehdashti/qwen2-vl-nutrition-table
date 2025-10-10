@@ -3,15 +3,19 @@ from datetime import datetime
 from accelerate import PartialState
 from trl import SFTConfig, SFTTrainer
 from peft import LoraConfig
-from dataset.data_utils import train_ds, test_ds
+from dataset.data_utils import get_datasets, format_data
 from dataset.collators import collate_fn
-from model_utils import save, load_model, get_matching_modules, load_processor_fixed
+from model_utils import save, load_model, get_matching_modules, load_processor_fixed, merge_adapters_to_base
 from eval_utils import evaluate_model
 from wandb_utils import init_wandb, WandBLossCallback
 from cleanup import clean_cache
 from datasets import load_dataset
-from transformers import EarlyStoppingCallback, TrainerCallback
+from transformers import EarlyStoppingCallback
 import wandb
+from viz_utils import quick_viz
+
+os.environ["HF_DATASETS_OFFLINE"] = "0"
+os.environ["HF_DATASETS_DISABLE_CACHING"] = "0"
 
 if not torch.cuda.is_available():
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -44,58 +48,31 @@ def deep_merge(base, override):
             merged[k] = v
     return merged
 
-# --- IoU reporting callback (mean IoU curve) ---
-class IoUEvalCallback(TrainerCallback):
-    def __init__(self, processor, test_ds, cfg, tag="mean_iou", n=50, every_n_steps=200):
-        self.processor = processor
-        self.test_ds = test_ds
-        self.cfg = cfg
-        self.tag = tag
-        self.n = n
-        self.every_n_steps = every_n_steps
-
-    def on_step_end(self, args, state, control, **kwargs):
-        if not state.is_local_process_zero:
-            return control
-        if state.global_step == 0 or state.global_step % self.every_n_steps != 0:
-            return control
-        model = kwargs["model"]
-        metrics = evaluate_model(
-            model,
-            n=self.n,
-            strict=True,
-            tag=self.tag,
-            cfg=self.cfg,
-            training_args=args,
-            plot=False,
-        )
-        mean_iou = metrics.get("mean_iou", 0.0)
-        if wandb.run is not None:
-            wandb.log({f"{self.tag}/mean_iou": mean_iou}, step=state.global_step)
-        else:
-            print(f"[no wandb] step {state.global_step} mean_iou={mean_iou:.4f}")
-        return control
-
-# --- compute_metrics wrapper (closure style) ---
-def make_compute_metrics(model, cfg, training_args):
+def make_compute_metrics(model, processor, cfg, training_args, eval_subset):
     def compute_metrics(eval_pred):
         metrics = evaluate_model(
             model,
-            n=50,
+            processor=processor,
+            dataset=eval_subset,
             strict=True,
-            tag="eval",
+            tag="eval_subset",
             cfg=cfg,
             training_args=training_args,
             plot=False,
         )
-        return {"mean_iou": metrics.get("mean_iou", 0.0)}
+        return {
+            "mean_iou": metrics.get("mean_iou", 0.0),
+            "precision@0.5": metrics.get("precision@0.5", 0.0),
+            "recall@0.5": metrics.get("recall@0.5", 0.0),
+            "f1@0.5": metrics.get("f1@0.5", 0.0),
+        }
     return compute_metrics
-
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default=os.environ.get("TRAIN_CONFIG"))
+    parser.add_argument("--pre_viz", type=str, default=None, help="Run quick_viz before training: pass idx, 'none' to skip")
     args, _ = parser.parse_known_args()
     if not args.config:
         raise SystemExit("Missing config. Pass --config or set TRAIN_CONFIG.")
@@ -110,13 +87,20 @@ if __name__ == "__main__":
     if "debug" in cfg:
         dbg = cfg["debug"]
         print("🐛 Debug mode from config")
-        dataset = load_dataset("openfoodfacts/nutrition-table-detection")
-        dataset_small = dataset["train"].select(range(dbg.get("dataset_subset", 20)))
-        cfg["dataset_debug"] = dataset_small
+        raw = load_dataset("openfoodfacts/nutrition-table-detection")
+        train_raw = raw["train"].select(range(dbg.get("dataset_subset", 20)))
+        val_raw = raw["val"].select(range(dbg.get("dataset_subset", 20)))
+        if cfg.get("format_data", False):
+            train_ds = [format_data(ex) for ex in train_raw]
+            test_ds = [format_data(ex) for ex in val_raw]
+        else:
+            train_ds, test_ds = train_raw, val_raw
         if "wandb" not in cfg:
             cfg["wandb"] = {}
         cfg["wandb"]["name"] = cfg["wandb"].get("name", cfg["experiment"]) + dbg.get("wandb_suffix", "-debug")
         cfg["wandb"]["tags"] = cfg["wandb"].get("tags", []) + dbg.get("wandb_tags", ["debug"])
+    else:
+        train_ds, test_ds = get_datasets(format_data_flag=cfg.get("format_data", False))
 
     proj_root = get_proj_root()
     runs_root = os.path.join(proj_root, "runs")
@@ -133,11 +117,28 @@ if __name__ == "__main__":
     processor = load_processor_fixed(model_id=cfg["model_id"])
     prev_dir = None
 
+    subset_size = cfg.get("eval_subset_size", 12)
+    if hasattr(test_ds, "select"):
+        eval_subset = [test_ds[i] for i in range(min(subset_size, len(test_ds)))]
+    else:
+        eval_subset = test_ds[:subset_size]
+
+    if args.pre_viz and args.pre_viz.lower() != "none":
+        try:
+            idx = int(args.pre_viz)
+            print(f"🔍 Running quick_viz on sample {idx} before training...")
+            quick_viz(idx=idx, from_dir=None, split="train", cfg=cfg)
+        except ValueError:
+            print(f"⚠️ Invalid pre_viz arg {args.pre_viz}, skipping")
+
     for stage_idx, stage in enumerate(cfg["stages"]):
         name = stage["name"]
         regex_targets = stage["regex_targets"]
         out_dir = os.path.join(run_dir, name)
         os.makedirs(out_dir, exist_ok=True)
+
+        use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+        use_fp16 = torch.cuda.is_available() and not use_bf16
 
         training_args = SFTConfig(
             output_dir=out_dir,
@@ -148,56 +149,53 @@ if __name__ == "__main__":
             learning_rate=float(stage["lr"]),
             gradient_checkpointing=True,
             optim="adamw_torch_fused",
-            bf16=True,
-            tf32=True,
+            bf16=use_bf16,
+            fp16=use_fp16,
+            tf32=True if torch.cuda.is_available() else False,
             report_to="wandb",
-            logging_steps=5,
-            eval_strategy="steps",
-            eval_steps=stage.get("eval_steps", 20),
-            save_strategy="steps",
-            save_steps=stage.get("save_steps", 20),
+            logging_steps=cfg.get("logging_steps", 10),
+            eval_strategy=cfg.get("eval_strategy", "steps"),
+            eval_steps=stage.get("eval_steps", cfg.get("eval_steps", 50)),
+            save_strategy=cfg.get("save_strategy", "steps"),
+            save_steps=stage.get("save_steps", cfg.get("save_steps", 50)),
             save_total_limit=2,
-            load_best_model_at_end=True,
+            load_best_model_at_end=cfg.get("load_best_model_at_end", True),
             metric_for_best_model="eval_loss",
             greater_is_better=False,
             max_grad_norm=0.3,
-            warmup_ratio=0.03,
-            lr_scheduler_type=cfg.get("lr_scheduler_type", "linear"),
+            warmup_ratio=cfg.get("warmup_ratio", 0.03),
+            lr_scheduler_type=stage.get("lr_scheduler_type", cfg.get("lr_scheduler_type", "linear")),
             gradient_checkpointing_kwargs={"use_reentrant": False},
-
-            # 🔧 OOM fixes
             eval_accumulation_steps=1,
             include_inputs_for_metrics=False,
-            prediction_loss_only=True,
+            prediction_loss_only=False,
         )
         training_args.remove_unused_columns = False
 
-        clean_base, _ = load_model(model_id=cfg["model_id"], dtype=torch.bfloat16,
-                                   use_adapters=False, cfg=cfg)
+        clean_base, _ = load_model(model_id=cfg["model_id"], dtype=torch.bfloat16, use_adapters=False, cfg=cfg)
         peft_cfg = LoraConfig(
             r=stage["lora_r"],
             lora_alpha=stage["lora_alpha"],
             lora_dropout=stage["lora_dropout"],
             bias="none",
             task_type="CAUSAL_LM",
-            target_modules=get_matching_modules(clean_base, regex_targets)
+            target_modules=get_matching_modules(clean_base, regex_targets),
         )
         del clean_base; torch.cuda.empty_cache()
 
         if stage_idx == 0:
             print(f"\n=== Stage: {name} (starting from base model) ===")
-            base_model, _ = load_model(model_id=cfg["model_id"], dtype=torch.bfloat16,
-                                       use_adapters=False, cfg=cfg)
+            base_model, _ = load_model(model_id=cfg["model_id"], dtype=torch.bfloat16, use_adapters=False, cfg=cfg)
         else:
             print(f"\n=== Stage: {name} (starting from adapters of {prev_dir}) ===")
-            base_model, _ = load_model(model_id=cfg["model_id"], dtype=torch.bfloat16,
-                                       use_adapters=True, from_dir=prev_dir, cfg=cfg)
+            base_model, _ = load_model(model_id=cfg["model_id"], dtype=torch.bfloat16, use_adapters=True, from_dir=prev_dir, cfg=cfg)
 
         if is_main:
             init_wandb(run_id, training_args, peft_cfg, stage_name=name, exp_name=exp_name)
 
         base_model.enable_input_require_grads()
         base_model.config.use_cache = False
+        base_model.config.name_or_path = cfg["model_id"]
 
         collator_cfg = cfg.get("collator", {})
         numeric_only = bool(collator_cfg.get("numeric_only", False))
@@ -209,21 +207,51 @@ if __name__ == "__main__":
             eval_dataset=test_ds,
             data_collator=lambda ex: collate_fn(ex, processor, numeric_only=numeric_only),
             peft_config=peft_cfg,
-            callbacks=[
-                WandBLossCallback(),
-                EarlyStoppingCallback(early_stopping_patience=3, early_stopping_threshold=0.001),
-                IoUEvalCallback(processor, test_ds, cfg, every_n_steps=200),
-            ],
-            compute_metrics=make_compute_metrics(base_model, cfg, training_args),
+            callbacks=[WandBLossCallback(), EarlyStoppingCallback(early_stopping_patience=3, early_stopping_threshold=0.001)],
+            compute_metrics=make_compute_metrics(base_model, processor, cfg, training_args, eval_subset),
+            processing_class=processor,
         )
 
         trainer.train()
-        eval_results = trainer.evaluate()
-        print(f"📊 Trainer eval results: {eval_results}")
 
-        save(trainer, None, training_args)  # only save adapters + config
+        full_metrics = evaluate_model(
+            base_model,
+            processor=processor,
+            dataset=test_ds,
+            n=123,
+            strict=True,
+            tag=f"{name}_full",
+            cfg=cfg,
+            training_args=training_args,
+            plot=False,
+        )
+        print(f"\n📊 Stage {name} full evaluation:")
+        print(full_metrics)
+        if wandb.run is not None:
+            wandb.log(full_metrics, step=trainer.state.global_step)
 
-        del base_model; torch.cuda.empty_cache()
+        save(trainer, None, training_args)
+
+        merge_adapters_to_base(cfg["model_id"], out_dir, dtype=torch.bfloat16)
+        merged_model, _ = load_model(model_id=cfg["model_id"], dtype=torch.bfloat16, use_adapters=False, from_dir=out_dir, cfg=cfg)
+        merged_metrics = evaluate_model(
+            merged_model,
+            processor=processor,
+            dataset=test_ds,
+            n=123,
+            strict=True,
+            tag=f"{name}_merged",
+            cfg=cfg,
+            training_args=training_args,
+            plot=False,
+        )
+        print(f"\n📊 Stage {name} merged evaluation:")
+        print(merged_metrics)
+        if wandb.run is not None:
+            wandb.log(merged_metrics, step=trainer.state.global_step + 1)
+
+        del merged_model; del base_model
+        torch.cuda.empty_cache()
         clean_cache(deep=False)
 
         if is_main:
@@ -232,4 +260,4 @@ if __name__ == "__main__":
         prev_dir = out_dir
 
     if is_main:
-        print("✅ All stages complete (adapters only, no merge)")
+        print("✅ All stages complete")

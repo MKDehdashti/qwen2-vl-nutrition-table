@@ -1,209 +1,106 @@
-import os, torch, wandb, argparse
-import matplotlib.pyplot as plt
+import os, torch, matplotlib.pyplot as plt
 from torchvision.ops import box_iou
-from viz_utils import run_inference_strict, draw_box_0to1000
-from model_utils_flash import load_model, load_processor_fixed
-from dataset.data_utils import train_ds, test_ds
+from viz_utils import run_inference_strict
+from dataset.data_utils import parse_boxes_from_text
 
-
-def test_one(model, idx=20, tag="baseline", split="val", out_dir=None,
-             training_args=None, cfg=None):
-    ds = test_ds if split == "val" else train_ds
-    image = ds[idx]["image"]
-    infer_dtype = getattr(model, "dtype", torch.float32)
-    processor = load_processor_fixed(
-        model_id=cfg["model_id"],
-        min_pixels=cfg.get("debug", {}).get("min_pixels", 224 * 224) if cfg else 224 * 224,
-        max_pixels=cfg.get("debug", {}).get("max_pixels", 900 * 28 * 28) if cfg else 900 * 28 * 28,
-    )
-    sample = run_inference_strict(
-        model, processor, image,
-        "Detect the bounding box of the nutrition table.", 1024,
-        dtype=infer_dtype
-    )
-
-    base_dir = out_dir or getattr(training_args, "output_dir", "./outputs")
-    os.makedirs(base_dir, exist_ok=True)
-    out_file = os.path.join(base_dir, f"bbox_{tag}_{split}_{idx}.png")
-    draw_box_0to1000(sample, save_path=out_file)
-    print(f"✅ Saved {out_file}")
-
-
-def evaluate_model(model, n=50, strict=True, iou_thresholds=None,
-                   plot=True, tag="baseline", out_dir=None,
-                   training_args=None, cfg=None, print_iou_per_sample=False):
-    if iou_thresholds is None:
-        iou_thresholds = [0.5, 0.75]
-    infer_dtype = getattr(model, "dtype", torch.float32)
-    dev = next(model.parameters()).device
-    processor = load_processor_fixed(
-        model_id=cfg["model_id"],
-        min_pixels=cfg.get("debug", {}).get("min_pixels", 224 * 224) if cfg else 224 * 224,
-        max_pixels=cfg.get("debug", {}).get("max_pixels", 900 * 28 * 28) if cfg else 900 * 28 * 28,
-    )
-
-    def _to_xyxy(b): 
-        # dataset = (y0, x0, y1, x1) → convert to (x0, y0, x1, y1)
-        return [b[1], b[0], b[3], b[2]]
-
-    def _scale(boxes):
-        if not boxes:
-            return boxes
-        mx = max(max(b) for b in boxes)
-        return [[c * 1000.0 for c in b] for b in boxes] if mx <= 1.0 else boxes
-
+def evaluate_model(
+    model,
+    processor,
+    n=123,
+    dataset=None,
+    strict=True,
+    tag=None,
+    cfg=None,
+    training_args=None,
+    plot=True,
+):
     model.eval()
-    per_image_ious = []
-    all_tp, all_fp, all_fn = {t: 0 for t in iou_thresholds}, {t: 0 for t in iou_thresholds}, {t: 0 for t in iou_thresholds}
-    n = min(n, len(test_ds))
+    device = next(model.parameters()).device
 
-    for idx in range(n):
-        ex = test_ds[idx]
-        gt_boxes = _scale(ex.get("objects", {}).get("bbox", []))
-        if not gt_boxes:
-            continue
-        pred = run_inference_strict(
-            model, processor, ex["image"],
-            "Detect the bounding box of the nutrition table.", 1024,
-            dtype=infer_dtype
+    if dataset is None:
+        raise ValueError("Dataset must be provided to avoid redundant loading.")
+
+    ds = dataset.select(range(min(n, len(dataset)))) if hasattr(dataset, "select") else dataset[:n]
+
+    ious, precisions, recalls, f1s, results = [], [], [], [], []
+
+    for idx in range(len(ds)):
+        sample = ds[idx]
+        msgs = sample["messages"]
+
+        gt_text = ""
+        if msgs and msgs[-1]["role"] == "assistant":
+            content = msgs[-1]["content"]
+            if isinstance(content, list) and len(content) > 0 and "text" in content[0]:
+                gt_text = content[0]["text"]
+            elif isinstance(content, str):
+                gt_text = content
+
+        gt_boxes = parse_boxes_from_text(gt_text)
+
+        # extract image from messages
+        image = None
+        for c in msgs[1]["content"]:
+            if c["type"] == "image":
+                image = c["image"]
+
+        metrics = run_inference_strict(
+            model,
+            processor=processor,
+            image_or_url=image,
+            prompt="Detect the bounding box of the nutrition table.",
+            dtype=getattr(model, "dtype", torch.float32),
         )
-        pred_boxes = _scale(pred.get("objects", {}).get("bbox", []))
-        if not pred_boxes:
+        if metrics is None:
             continue
 
-        # swap truth only
-        gt_swapped = [_to_xyxy(b) for b in gt_boxes]
+        pred_boxes = metrics.get("objects", {}).get("bbox", [])
+        iou_mean, precision, recall, f1 = 0.0, 0.0, 0.0, 0.0
 
-        gt_t = torch.tensor(gt_swapped, dtype=torch.float32, device=dev)
-        pr_t = torch.tensor(pred_boxes, dtype=torch.float32, device=dev)
-        iou_mat = box_iou(gt_t, pr_t).cpu()
+        if gt_boxes and pred_boxes:
+            gt_t = torch.tensor(gt_boxes, dtype=torch.float32)
+            pr_t = torch.tensor(pred_boxes, dtype=torch.float32)
+            if gt_t.ndim == 1: gt_t = gt_t.unsqueeze(0)
+            if pr_t.ndim == 1: pr_t = pr_t.unsqueeze(0)
 
-        # 🆕 Debug printing
-        print(f"Current Sample Index: {idx} out of {n}")
-        print("pred:", pred_boxes, "truth:", gt_swapped)
-        if print_iou_per_sample:
-            print("IoU matrix:", iou_mat.tolist())
+            ious_mat = box_iou(gt_t, pr_t)
+            best_gt = ious_mat.max(dim=1)[0]
+            best_pr = ious_mat.max(dim=0)[0]
+            iou_mean = (best_gt.mean() + best_pr.mean()).item() / 2
 
-        # mean IoU
-        if strict:
-            used_preds, matched = set(), []
-            for gi in range(iou_mat.size(0)):
-                row = iou_mat[gi]
-                best_pi = torch.argmax(row).item()
-                best_iou = row[best_pi].item()
-                if best_pi not in used_preds:
-                    used_preds.add(best_pi)
-                    matched.append(best_iou)
-            if matched:
-                per_image_ious.append(sum(matched) / len(matched))
-        else:
-            matched = [row.max().item() for row in iou_mat]
-            if matched:
-                per_image_ious.append(sum(matched) / len(matched))
+            matched = (ious_mat > 0.5).sum().item()
+            precision = matched / len(pr_t)
+            recall = matched / len(gt_t)
+            f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
 
-        # precision / recall
-        for thr in iou_thresholds:
-            tp, fp = 0, 0
-            matched_gt = set()
-            for pi in range(iou_mat.size(1)):
-                best_iou, gi = iou_mat[:, pi].max(dim=0)
-                if best_iou.item() >= thr:
-                    tp += 1
-                    matched_gt.add(gi.item())
-                else:
-                    fp += 1
-            fn = iou_mat.size(0) - len(matched_gt)
-            all_tp[thr] += tp
-            all_fp[thr] += fp
-            all_fn[thr] += fn
+        metrics["iou"] = iou_mean
+        metrics["precision"] = precision
+        metrics["recall"] = recall
+        metrics["f1"] = f1
 
-    mean_iou = sum(per_image_ious) / len(per_image_ious) if per_image_ious else 0.0
-    metrics = {"mean_iou": mean_iou}
-    for thr in iou_thresholds:
-        tp, fp, fn = all_tp[thr], all_fp[thr], all_fn[thr]
-        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
-        metrics[f"precision@{thr}"] = precision
-        metrics[f"recall@{thr}"] = recall
-        metrics[f"f1@{thr}"] = f1
-    ap_scores = [metrics[f"precision@{t}"] * metrics[f"recall@{t}"] for t in iou_thresholds]
-    metrics["mAP"] = sum(ap_scores) / len(ap_scores) if ap_scores else 0.0
+        ious.append(iou_mean)
+        precisions.append(precision)
+        recalls.append(recall)
+        f1s.append(f1)
+        results.append(metrics)
 
-    if plot:
-        ths = list(iou_thresholds)
-        precisions = [metrics[f"precision@{t}"] for t in ths]
-        recalls = [metrics[f"recall@{t}"] for t in ths]
-        plt.figure(figsize=(6, 4))
-        plt.plot(ths, precisions, marker="o", label="Precision")
-        plt.plot(ths, recalls, marker="s", label="Recall")
-        plt.xlabel("IoU Threshold")
-        plt.ylabel("Score")
-        plt.title("Precision / Recall vs IoU Threshold")
-        plt.legend()
-        plt.grid(True)
-        save_dir = out_dir or getattr(training_args, "output_dir", "./outputs")
-        os.makedirs(save_dir, exist_ok=True)
-        save_path = os.path.join(save_dir, f"precision_recall_curve_{tag}.png")
-        plt.savefig(save_path, dpi=150, bbox_inches="tight")
+    out = {}
+    if ious: out["mean_iou"] = sum(ious) / len(ious)
+    if precisions: out["precision@0.5"] = sum(precisions) / len(precisions)
+    if recalls: out["recall@0.5"] = sum(recalls) / len(recalls)
+    if f1s: out["f1@0.5"] = sum(f1s) / len(f1s)
+
+    if plot and results and training_args:
+        precisions_curve = [m.get("precision", 0.0) for m in results]
+        recalls_curve = [m.get("recall", 0.0) for m in results]
+        plt.figure()
+        plt.plot(recalls_curve, precisions_curve, marker="o")
+        plt.xlabel("Recall")
+        plt.ylabel("Precision")
+        plt.title(f"PR Curve ({tag})")
+        pr_path = os.path.join(training_args.output_dir, f"precision_recall_curve_{tag}.png")
+        plt.savefig(pr_path, bbox_inches="tight")
         plt.close()
-        metrics["pr_curve_path"] = save_path
-        print(f"📊 Precision/Recall curve saved to {save_path}")
+        out["pr_curve_path"] = pr_path
 
-    print(f"📊 {tag} metrics:", metrics)
-    return metrics
-
-
-def run_and_log_eval(stage_name, tag="eval", n=50, strict=True,
-                     from_dir=None, training_args=None, step=None, cfg=None,
-                     print_iou_per_sample=False):
-    if not cfg or "model_id" not in cfg:
-        raise ValueError("Config must include 'model_id'")
-
-    model, _ = load_model(
-        model_id=cfg["model_id"],
-        dtype=torch.bfloat16,
-        use_adapters=True,
-        from_dir=from_dir,
-        cfg=cfg
-    )
-    metrics = evaluate_model(model, n=n, strict=strict,
-                             tag=tag, out_dir=from_dir,
-                             training_args=training_args, cfg=cfg,
-                             print_iou_per_sample=print_iou_per_sample)
-
-    log_dict = {f"{tag}/{k}": v for k, v in metrics.items() if k != "pr_curve_path"}
-    if "pr_curve_path" in metrics:
-        log_dict[f"{tag}/pr_curve"] = wandb.Image(metrics["pr_curve_path"])
-    if wandb.run is not None:
-        wandb.log(log_dict, step=step)
-    else:
-        print(f"[no wandb run] {stage_name} metrics:", log_dict)
-
-    del model
-    torch.cuda.empty_cache()
-    return {"adapters": metrics}
-
-
-# === CLI for standalone eval ===
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--from_dir", type=str, required=True, help="Checkpoint dir")
-    parser.add_argument("--config", type=str, required=True, help="Config yaml path")
-    parser.add_argument("--tag", type=str, default="manual_eval", help="Eval tag")
-    parser.add_argument("--n", type=int, default=50, help="Number of samples")
-    parser.add_argument("--print_iou_per_sample", action="store_true", help="Print IoU matrix for each sample")
-    args = parser.parse_args()
-
-    import yaml
-    with open(args.config) as f:
-        cfg = yaml.safe_load(f)
-
-    run_and_log_eval(
-        stage_name="manual",
-        tag=args.tag,
-        n=args.n,
-        from_dir=args.from_dir,
-        cfg=cfg,
-        print_iou_per_sample=args.print_iou_per_sample
-    )
+    return out
