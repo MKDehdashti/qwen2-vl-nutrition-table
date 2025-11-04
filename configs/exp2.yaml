@@ -1,0 +1,21 @@
+experiment: exp2_numeric_resume
+quantized: false
+
+
+collator:
+  numeric_only: true
+
+stages:
+  - name: lang_vision
+    batch_size: 2
+    grad_accum_steps: 8
+    lr: 0.00005
+    epochs: 8
+    lora_r: 8
+    lora_alpha: 16
+    lora_dropout: 0.05
+    regex_targets:
+      - "visual\\.blocks\\.\\d+\\.attn\\.qkv"
+      - "visual\\.blocks\\.\\d+\\.attn\\.proj"
+      - "self_attn\\.q_proj"
+      - "self_attn\\.v_proj"

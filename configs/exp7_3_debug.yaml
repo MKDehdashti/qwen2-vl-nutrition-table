@@ -1,0 +1,51 @@
+experiment: exp7_3_debug
+
+model_id: "Qwen/Qwen2-VL-7B-Instruct"
+
+min_pixels: 50176
+max_pixels: 705600
+max_seq_length: 512
+lr_scheduler_type: "linear"
+warmup_ratio: 0.03
+
+eval_strategy: "steps"
+eval_steps: 5
+save_strategy: "steps"
+save_steps: 5
+logging_steps: 2
+
+load_best_model_at_end: false
+
+stages:
+  - name: exp7_3_debug_vision
+    batch_size: 1
+    grad_accum_steps: 1
+    lr: 0.0001
+    epochs: 1
+    lora_r: 1
+    lora_alpha: 1
+    lora_dropout: 0.1
+    regex_targets:
+      - "visual\\.blocks\\.\\d+\\.attn\\.qkv"
+      - "visual\\.blocks\\.\\d+\\.attn\\.proj"
+
+  - name: exp7_3_debug_lang_vision
+    batch_size: 1
+    grad_accum_steps: 1
+    lr: 0.00001
+    epochs: 1
+    lora_r: 1
+    lora_alpha: 1
+    lora_dropout: 0.1
+    regex_targets:
+      - "visual\\.blocks\\.\\d+\\.attn\\.qkv"
+      - "visual\\.blocks\\.\\d+\\.attn\\.proj"
+      - "self_attn\\.q_proj"
+      - "self_attn\\.v_proj"
+
+debug:
+  dataset_subset: 20
+  wandb_suffix: "-debug"
+  wandb_tags: ["debug"]
+  max_steps: 10
+  max_seq_length: 256

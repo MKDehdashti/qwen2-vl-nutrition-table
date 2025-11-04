@@ -1,0 +1,119 @@
+experiment: exp10_merge_test
+
+model_id: "Qwen/Qwen2-VL-7B-Instruct"
+
+# image + sequence limits
+min_pixels: 784          # 28x28
+max_pixels: 705600       # 900*28*28
+max_seq_length: 512
+warmup_ratio: 0.03
+
+# logging / checkpointing
+eval_strategy: "steps"
+eval_steps: 80
+save_strategy: "steps"
+save_steps: 80
+logging_steps: 10
+load_best_model_at_end: false
+
+# global toggles
+use_flash: true
+format_data: true
+collator:
+  enabled: true
+  numeric_only: false
+
+# debug controls (moderate subset)
+debug:
+  dataset_subset: 123
+  wandb_suffix: "-mergecheck"
+  wandb_tags: ["mergecheck"]
+
+debug_eval: true
+debug_eval_limit: 5
+
+# optional visualization indices
+precheck_idx: 10
+precheck_split: "train"
+postcheck_idx: 8
+postcheck_split: "val"
+
+# stages ----------------------------------------------------
+stages:
+  # Stage 1 – vision fine-tune (light)
+  - name: exp10_vision_last8_merge_test5
+    batch_size: 4
+    grad_accum_steps: 4
+    lr: 5e-5
+    epochs: 2
+    lora_r: 8
+    lora_alpha: 16
+    lora_dropout: 0.1
+    lr_scheduler_type: "constant"
+    regex_targets:
+      - "visual\\.blocks\\.(2[3-9]|30)\\.attn\\.(qkv|proj)"
+      - "visual\\.blocks\\.\\d+\\.mlp\\.(fc1|fc2)" # added from _repro config to see if it breaks merging
+      - "visual\\.merger\\.mlp\\.[02]" # added from _repro config to see if it breaks merging
+
+  # Stage 2 – joint fine-tune (short but complete)
+  - name: exp10_joint_short_merge_test5
+    batch_size: 2
+    grad_accum_steps: 8
+    lr: 3e-5
+    epochs: 3
+    lora_r: 16
+    lora_alpha: 32
+    lora_dropout: 0.1
+    lr_scheduler_type: "linear"
+    regex_targets:
+      - "visual\\.blocks\\.\\d+\\.(attn\\.(qkv|proj)|mlp\\.(fc1|fc2))"
+      - "visual\\.merger\\.mlp\\.[02]"
+      - "self_attn\\.(q_proj|k_proj|v_proj|o_proj)"
+      - "mlp\\.(gate_proj|up_proj|down_proj)"
+
+
+# _merge_test1: comment out # if hasattr(base_with_adapters, "set_adapter"): # 1
+                            #     base_with_adapters.set_adapter("default")
+                            # results:
+                            #  📊 Stage exp10_joint_short_merge_test1 full evaluation:
+                            # {'mean_iou': 0.6176083130881236, 'precision@0.5': 0.6504065040650406, 'recall@0.5': 0.6368563685636857, 'f1@0.5': 0.6409214092140922}
+                            # 📊 Stage exp10_joint_short_merge_test1 merged evaluation:
+                            # {'mean_iou': 0.6141254348752309, 'precision@0.5': 0.6422764227642277, 'recall@0.5': 0.6287262872628727, 'f1@0.5': 0.6327913279132792}
+
+# _merge_test2: comment out # base_with_adapters.config.use_cache = False # 2
+                            # results:
+                            # 📊 Stage exp10_joint_short_merge_test2 full evaluation:
+                            # {'mean_iou': 0.6111719727287129, 'precision@0.5': 0.6422764227642277, 'recall@0.5': 0.6287262872628727, 'f1@0.5': 0.6327913279132792}
+                            #  Stage exp10_joint_short_merge_test2 merged evaluation:
+                            # {'mean_iou': 0.6108546160914882, 'precision@0.5': 0.6422764227642277, 'recall@0.5': 0.6287262872628727, 'f1@0.5': 0.6327913279132792}
+
+# _merge_test3: comment out # base_with_adapters.to(torch.float32) # 3
+                            # merged.to(torch.bfloat16) # 3
+                            # results:
+                            # 📊 Stage exp10_joint_short_merge_test3 full evaluation:
+                            # {'mean_iou': 0.6186931060865613, 'precision@0.5': 0.6504065040650406, 'recall@0.5': 0.6368563685636857, 'f1@0.5': 0.6409214092140922}
+                            # 📊 Stage exp10_joint_short_merge_test3 merged evaluation:
+                            # {'mean_iou': 0.6093942124682395, 'precision@0.5': 0.6341463414634146, 'recall@0.5': 0.6205962059620597, 'f1@0.5': 0.6246612466124662}
+
+# _merge_test4: original merge function to confirm it works as before
+                            # def merge_adapters_to_base(model_id: str, adapter_dir: str, dtype=torch.bfloat16):
+                            #     base_with_adapters, _ = load_model(model_id=model_id, dtype=dtype,
+                            #                                       use_adapters=True, from_dir=adapter_dir)
+                            #     if not isinstance(base_with_adapters, PeftModel):
+                            #         raise ValueError(f"No adapters to merge at {adapter_dir}")
+                            #     merged = base_with_adapters.merge_and_unload()
+                            #     out = os.path.join(adapter_dir, "merged")
+                            #     os.makedirs(out, exist_ok=True)
+                            #     merged.save_pretrained(out, safe_serialization=True)
+                            #     print(f"✅ Merged model saved to {out}")
+                            #     return out
+                            # results:
+                            #📊 Stage exp10_joint_short_merge_test4 full evaluation:
+                            # {'mean_iou': 0.6151070167089063, 'precision@0.5': 0.6422764227642277, 'recall@0.5': 0.6287262872628727, 'f1@0.5': 0.6327913279132792}
+                            # 📊 Stage exp10_joint_short_merge_test4 merged evaluation:
+                            # {'mean_iou': 0.6029519978134582, 'precision@0.5': 0.6260162601626016, 'recall@0.5': 0.6124661246612467, 'f1@0.5': 0.6165311653116532}
+
+
+# _merge_test5: added to line to stage 1 from _repro to see if it breaks merging
+                            # - "visual\\.blocks\\.\\d+\\.mlp\\.(fc1|fc2)" 
+                            # - "visual\\.merger\\.mlp\\.[02]" 

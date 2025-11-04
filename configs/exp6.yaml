@@ -1,0 +1,54 @@
+experiment: exp6
+
+model_id: "Qwen/Qwen2-VL-7B-Instruct"
+
+min_pixels: 50176    # 224 * 224
+max_pixels: 705600   # 900 * 28 * 28
+max_seq_length: 1024
+lr_scheduler_type: "constant"
+warmup_ratio: 0.03
+
+eval_strategy: "steps"
+eval_steps: 50
+save_strategy: "steps"
+save_steps: 50
+logging_steps: 10
+
+resume_strategy: "checkpoint"
+
+load_best_model_at_end: true
+metric_for_best_model: "eval_loss"
+greater_is_better: false
+
+stages:
+  - &vision
+    name: exp6_vision
+    batch_size: 4
+    grad_accum_steps: 8
+    lr: 0.00005
+    epochs: 5
+    lora_r: 8
+    lora_alpha: 16
+    lora_dropout: 0.05
+    regex_targets:
+      - "visual\\.blocks\\.\\d+\\.attn\\.qkv"
+      - "visual\\.blocks\\.\\d+\\.attn\\.proj"
+      - "visual\\.merger\\.mlp\\.0"
+      - "visual\\.merger\\.mlp\\.2"
+
+  - &lang_vision
+    name: exp6_lang_vision
+    batch_size: 2
+    grad_accum_steps: 8
+    lr: 0.00003    
+    epochs: 6
+    lora_r: 8
+    lora_alpha: 16
+    lora_dropout: 0.05
+    regex_targets:
+      - "visual\\.blocks\\.\\d+\\.attn\\.qkv"
+      - "visual\\.blocks\\.\\d+\\.attn\\.proj"
+      - "visual\\.merger\\.mlp\\.0"
+      - "visual\\.merger\\.mlp\\.2"
+      - "self_attn\\.q_proj"
+      - "self_attn\\.v_proj"

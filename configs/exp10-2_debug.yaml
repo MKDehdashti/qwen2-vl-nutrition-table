@@ -1,0 +1,69 @@
+experiment: exp10_debug
+
+model_id: "Qwen/Qwen2-VL-7B-Instruct"
+
+# image + sequence limits
+min_pixels: 784          # 28x28
+max_pixels: 705600       # 900*28*28
+max_seq_length: 512
+warmup_ratio: 0.03
+
+# eval/checkpoint/logging
+eval_strategy: "steps"
+eval_steps: 70
+save_strategy: "steps"
+save_steps: 70
+logging_steps: 5
+
+load_best_model_at_end: false
+
+# global toggles
+use_flash: true
+format_data: true
+collator:
+  enabled: true
+  numeric_only: false
+
+# debug controls
+debug:
+  dataset_subset: 50
+  wandb_suffix: "-debug"
+  wandb_tags: ["debug"]
+
+debug_eval: true
+debug_eval_limit: 3
+
+# optional pre/post visualization indices (CLI can override these)
+precheck_idx: 20
+precheck_split: "train"
+postcheck_idx: 5
+postcheck_split: "val"
+
+# stages
+stages:
+  - name: exp10_debug_vision_last
+    batch_size: 4
+    grad_accum_steps: 2
+    lr: 0.0001
+    epochs: 1
+    lora_r: 1
+    lora_alpha: 1
+    lora_dropout: 0.1
+    lr_scheduler_type: "constant"
+    regex_targets:
+      - "visual\\.blocks\\.30\\.attn\\.(qkv|proj)"   # only last vision layer
+
+  - name: exp10_debug_joint_last
+    batch_size: 4
+    grad_accum_steps: 2
+    lr: 5e-5
+    epochs: 1
+    lora_r: 1
+    lora_alpha: 1
+    lora_dropout: 0.1
+    lr_scheduler_type: "linear"
+    regex_targets:
+      - "visual\\.blocks\\.30\\.(attn\\.(qkv|proj)|mlp\\.(fc1|fc2))"  # last vision block
+      - "visual\\.merger\\.mlp\\.[02]"                                # merger layer
+      - "self_attn\\.(q_proj|k_proj|v_proj|o_proj)"                   # all language blocks
+      - "mlp\\.(gate_proj|up_proj|down_proj)"                         # all language MLPs
