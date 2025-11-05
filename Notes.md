@@ -9,6 +9,8 @@ source /workspace/projects/nutrition-table/.venv/bin/activate
  accelerate launch --mixed_precision=bf16 /workspace/projects/nutrition-table/src/train.py --config configs/exp1.yaml
   accelerate launch --mixed_precision=bf16 src/train.py --config configs/exp1.yaml
 
+ accelerate launch --mixed_precision=bf16 --multi_gpu src/train.py --config configs/exp10_merge_test_repro.yaml
+
 
  python -u src/train.py --config configs/exp1_debug.yaml
  python -u src/train.py --config con(.venv) root@8791c11f9ca0:/workspace#  accelerate launch --mixed_precision=bf16 /workspace/projects/nutrition-table/src/train.py --config configs/exp1.yaml

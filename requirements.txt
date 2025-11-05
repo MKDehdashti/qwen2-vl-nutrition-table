@@ -1,26 +1,25 @@
-# PyTorch stack (CUDA 12.1 wheels)
-torch==2.4.1+cu121
-torchvision==0.19.1+cu121
-torchaudio==2.4.1+cu121
+# === PyTorch stack (CUDA 12.x wheels) ===
+torch==2.9.0
+torchvision==0.24.0
+torchaudio==2.9.0
 --extra-index-url https://download.pytorch.org/whl/cu121
 
-# Hugging Face ecosystem (dev branches + libs)
-git+https://github.com/huggingface/transformers.git
-git+https://github.com/huggingface/trl.git
-datasets==3.0.2
-bitsandbytes==0.44.1
+# === Hugging Face ecosystem (dev branches + libs) ===
+git+https://github.com/huggingface/transformers.git@main
+git+https://github.com/huggingface/trl.git@main
+datasets==4.3.0
 peft==0.13.2
+accelerate==1.11.0
+bitsandbytes==0.47.0
 qwen-vl-utils==0.0.8
 wandb==0.18.5
-accelerate>=1.4.0
 
-# Visualization & utils
-matplotlib
-IPython
+# === FlashAttention (optimized kernels for CUDA 12.x) ===
+# flash-attn==2.8.3   # install manually after environment setup
+triton==3.5.0
 
-# Performance
-#flash-attn
-triton
-
-dotenv
-pyyaml
+# === Visualization & utilities ===
+matplotlib==3.10.6
+IPython==8.37.0
+python-dotenv==1.1.1
+pyyaml==6.0.3

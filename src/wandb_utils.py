@@ -1,7 +1,6 @@
 import os
 import wandb
 from transformers import TrainerCallback
-from huggingface_hub import HfFolder
 
 def _load_secrets():
     proj_root = os.path.dirname(os.path.dirname(__file__))  # one level up from src/
@@ -19,17 +18,23 @@ def _load_secrets():
 # Load secrets into env
 _load_secrets()
 
-# Hugging Face login
+# ---- Hugging Face login ----
 hf_token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_HUB_TOKEN")
 if hf_token:
-    HfFolder.save_token(hf_token)
+    try:
+        # New-style API (huggingface_hub>=1.0)
+        from huggingface_hub import login as hf_login
+        hf_login(token=hf_token, add_to_git_credential=False)
+        print("🔑 Hugging Face login succeeded.")
+    except Exception as e:
+        print(f"⚠️ Hugging Face login failed: {e}")
 
-# W&B login
+# ---- Weights & Biases login ----
 wandb_token = os.getenv("WANDB_API_KEY")
 if wandb_token:
     wandb.login(key=wandb_token)
 
-
+# ---- Callback ----
 class WandBLossCallback(TrainerCallback):
     def on_log(self, args, state, control, logs=None, **kwargs):
         if not state.is_world_process_zero:
@@ -37,6 +42,7 @@ class WandBLossCallback(TrainerCallback):
         if logs is not None:
             wandb.log(logs, step=state.global_step)
 
+# ---- W&B init ----
 def init_wandb(run_id, training_args, lora_config=None, stage_name=None, exp_name="exp1"):
     def get(obj, key, default=None):
         if isinstance(obj, dict):
@@ -46,9 +52,9 @@ def init_wandb(run_id, training_args, lora_config=None, stage_name=None, exp_nam
     wandb.init(
         project=os.getenv("WANDB_PROJECT", "nutrition-table-vl"),
         entity=os.getenv("WANDB_ENTITY"),
-        group=f"{exp_name}_{run_id}",   # one experiment group
-        job_type=stage_name,            # baseline, vision, lang_vision, etc.
-        name=f"{stage_name}_{run_id}",  # run name
+        group=f"{exp_name}_{run_id}",
+        job_type=stage_name,
+        name=f"{stage_name}_{run_id}",
         config={
             "run_id": run_id,
             "stage": stage_name,

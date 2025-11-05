@@ -51,3 +51,10 @@ fi
 
 echo "🎉 Environment ready!"
 echo "👉 To activate later, run: source $VENV_DIR/bin/activate"
+
+# === Add project src to PYTHONPATH permanently ===
+if ! grep -q "export PYTHONPATH=.*nutrition-table/src" "$VENN_DIR/bin/activate" 2>/dev/null; then
+  echo "export PYTHONPATH=$PROJECT_DIR/src:\$PYTHONPATH" >> "$VENN_DIR/bin/activate"
+  echo "✅ Added PYTHONPATH to venv activate script."
+fi
+
