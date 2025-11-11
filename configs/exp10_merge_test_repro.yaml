@@ -5,7 +5,7 @@ model_id: "Qwen/Qwen2-VL-7B-Instruct"
 min_pixels: 784
 max_pixels: 705600
 max_seq_length: 512
-warmup_ratio: 0.03
+warmup_steps: 100
 
 # min_pixels: 50176
 # max_pixels: 705600
@@ -19,7 +19,7 @@ save_steps: 80
 logging_steps: 80
 load_best_model_at_end: true
 
-use_flash: false
+use_flash: true
 format_data: true
 collator:
   enabled: true
@@ -39,14 +39,14 @@ collator:
 # debug_eval: true
 # debug_eval_limit: 5
 
-continue_from_merged: true
+# continue_from_merged: true
 
 stages:
   # Stage 1 – vision warmup (last 8 blocks only)
   - name: exp10_visio_warmup_merge_test_repro_14
     batch_size: 4
     grad_accum_steps: 4
-    lr: 0.00005
+    lr: 0.0001
     epochs: 3
     lora_r: 8
     lora_alpha: 16
@@ -59,7 +59,7 @@ stages:
   - name: exp10_full_visio_merge_test_repro_14
     batch_size: 2
     grad_accum_steps: 8
-    lr: 0.0001
+    lr: 0.0002
     epochs: 6
     lora_r: 16
     lora_alpha: 32
@@ -74,7 +74,7 @@ stages:
   - name: exp10_joint_merge_test_repro_14
     batch_size: 1
     grad_accum_steps: 16
-    lr: 0.00001
+    lr: 0.00002
     epochs: 6
     lora_r: 16
     lora_alpha: 32
@@ -240,7 +240,7 @@ stages:
                           # run 1023_2035
                           # eval mean_iou: 0.75 --> 0.85 --> 0.89
 
-# _merge_test_repro_14: 1B, 2 GPU, use_flash: false
+# _merge_test_repro_14: 1B, 2 GPU, double lrs
 
 
                           
