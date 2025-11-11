@@ -2,7 +2,7 @@ import subprocess
 import argparse
 
 def clean_cache(deep: bool = False):
-    cmd = ["bash", "/workspace/projects/nutrition-table/cleanup.sh"]
+    cmd = ["bash", "cleanup.sh"]
     if deep:
         cmd.append("--deep")
     subprocess.run(cmd, check=True)

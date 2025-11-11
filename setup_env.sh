@@ -2,29 +2,29 @@
 set -e
 
 # === Config ===
-PROJECT_DIR="/workspace/projects/nutrition-table"
+PROJECT_DIR="/workspace/projects/nutrition-table3"
 VENV_DIR="$PROJECT_DIR/.venv"
 REQ_FILE="$PROJECT_DIR/requirements.txt"
+PY_BIN="python3.10"
 
 # Persistent cache & tmp inside /workspace
 export PIP_CACHE_DIR="/workspace/.pipcache"
 export TMPDIR="/workspace/tmp"
 mkdir -p "$PIP_CACHE_DIR" "$TMPDIR"
 
-# Detect current Python version (major.minor, e.g. 3.12)
-CURRENT_PY=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+# Detect current Python version (major.minor)
+CURRENT_PY=$($PY_BIN -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
 
 # Function to (re)create venv
 create_venv () {
     echo "🔧 Creating venv with Python $CURRENT_PY..."
     rm -rf "$VENV_DIR"
-    python3 -m venv "$VENV_DIR"
+    $PY_BIN -m venv "$VENV_DIR"
 }
 
 # If venv exists, check if Python version matches
 if [ -d "$VENV_DIR" ]; then
     VENV_PY=$("$VENV_DIR/bin/python" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "MISMATCH")
-
     if [ "$VENV_PY" != "$CURRENT_PY" ]; then
         echo "⚠️ Venv Python version mismatch (venv=$VENV_PY, system=$CURRENT_PY)"
         create_venv

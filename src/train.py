@@ -187,8 +187,10 @@ if __name__ == "__main__":
             print(f"\n=== Stage: {name} (starting from base model) ===")
             base_model, _ = load_model(model_id=cfg["model_id"], dtype=torch.bfloat16, use_adapters=False, cfg=cfg)
         else:
-            print(f"\n=== Stage: {name} (starting from adapters of {prev_dir}) ===")
-            base_model, _ = load_model(model_id=cfg["model_id"], dtype=torch.bfloat16, use_adapters=True, from_dir=prev_dir, cfg=cfg)
+            print(f"\n=== Stage: {name} (starting from merged model of {prev_dir}) ===")
+            base_model, _ = load_model(model_id=cfg["model_id"], dtype=torch.bfloat16, use_adapters=False, from_dir=prev_dir, cfg=cfg)
+
+
 
         if is_main:
             init_wandb(run_id, training_args, peft_cfg, stage_name=name, exp_name=exp_name)

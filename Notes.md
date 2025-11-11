@@ -1,12 +1,12 @@
 # Commands
-source /workspace/projects/nutrition-table/.venv/bin/activate
+source /workspace/projects/nutrition-table3/.venv/bin/activate
 
  pip install -r projects/nutrition-table/requirements.txt
 
  accelerate launch --mixed_precision=bf16 --multi_gpu projects/nutrition-table/src/train.py
  accelerate launch --mixed_precision=bf16 /workspace/projects/nutrition-table/src/train.py --config configs/exp1.yaml
   accelerate launch --mixed_precision=bf16 src/train.py --config configs/exp3.yaml
-  accelerate launch --multi_gpu --mixed_precision=bf16 src/train.py --config configs/exp10-3.yaml
+  accelerate launch --multi_gpu --mixed_precision=bf16 src/train.py --config configs/exp10_merge_test_repro.yaml
 
   accelerate launch --num_processes=1 --mixed_precision=bf16 src/train.py --config configs/exp7_2.yaml
 
@@ -15,9 +15,9 @@ source /workspace/projects/nutrition-table/.venv/bin/activate
     python src_flash_format/train.py --config configs/exp9_debug.yaml
     python src_flash_format/train.py --config configs/exp10.yaml
 
-python src_combo/train.py --config configs/exp10-2_debug.yaml
+python src/train.py --config configs/exp10_merge_test_repro.yaml
 
-  python src/cleanup.py
+  python src/cleanup.py --deep
 
 run viz:
 python train.py --config configs/exp10.yaml --precheck-idx 20
