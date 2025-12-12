@@ -2,7 +2,7 @@
 set -e
 
 # === Config ===
-PROJECT_DIR="/workspace/projects/nutrition-table3"
+PROJECT_DIR="/workspace/projects/nutrition_table_fine_tuning"
 VENV_DIR="$PROJECT_DIR/.venv"
 REQ_FILE="$PROJECT_DIR/requirements.txt"
 PY_BIN="python3.10"
