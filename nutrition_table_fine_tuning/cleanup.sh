@@ -22,11 +22,11 @@ rm -rf /workspace/envs/qwen/qwenvenv/lib/python*/site-packages/torch/.nv_fuser_c
 pip cache purge || true
 
 # Deep mode: wipe models + runs
-if [[ "$MODE" == "deep" ]]; then
-  echo "⚠️ Deep mode enabled: removing models and runs!"
-  rm -rf /workspace/models/* 2>/dev/null || true
-  rm -rf /workspace/projects/nutrition-table/runs/* 2>/dev/null || true
-fi
+# if [[ "$MODE" == "deep" ]]; then
+#   echo "⚠️ Deep mode enabled: removing models and runs!"
+#   rm -rf /workspace/models/* 2>/dev/null || true
+  # rm -rf /workspace/projects/nutrition-table/runs/* 2>/dev/null || true
+# fi
 
 # Recreate structure
 mkdir -p /workspace/.cache/hf/hub

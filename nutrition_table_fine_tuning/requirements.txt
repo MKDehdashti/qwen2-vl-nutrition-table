@@ -36,7 +36,7 @@ nvidia-nccl-cu12==2.27.3
 # -----------------------------
 # 4. FlashAttention (optional but recommended)
 # -----------------------------
-# flash_attn==2.8.3
+# flash_attn==2.8.3 --no-build-isolation
 
 # -----------------------------
 # 5. Hugging Face ecosystem

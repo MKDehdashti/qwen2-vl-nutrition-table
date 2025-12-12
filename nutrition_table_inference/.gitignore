@@ -69,13 +69,3 @@ secrets/
 # other projects or unrelated files
 debug-demo/
 speech/
-nutrition_table_inference/AutoGPTQ/
-
-**/*.tar.gz
-**/venv*/
-**/env*/
-**/wandb/
-**/outputs/
-**/model/
-**/models/
-**/*.safetensors

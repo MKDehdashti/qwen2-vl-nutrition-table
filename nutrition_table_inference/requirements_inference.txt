@@ -1,0 +1,24 @@
+--index-url https://pypi.org/simple
+--extra-index-url https://download.pytorch.org/whl/cu128
+
+# Core PyTorch
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+# torch==2.8.0 (install before requirements)
+
+# Core inference
+transformers==4.57.1
+# auto-gptq==0.7.1
+vllm==0.11.0
+safetensors
+accelerate>=1.4.0
+sentencepiece
+
+# Utilities
+numpy
+Pillow
+tqdm
+pyyaml
+
+datasets
+torchvision
+matplotlib

@@ -1,5 +1,44 @@
 # Commands
-source /workspace/projects/nutrition-table3/.venv/bin/activate
+source /workspace/projects/nutrition_table_fine_tuning/.venv/bin/activate
+source /workspace/projects/nutrition_table_inference/env_infer/bin/activate
+
+vllm serve model/Qwen2-VL-7B/final_model --dtype bfloat16
+
+python -m vllm.entrypoints.openai.api_server \
+  --model /workspace/projects/nutrition-table3/model/Qwen2-VL-7B/quantized_gptqmodel \
+  --dtype float16 \
+  --quantization gptq \
+  --host 0.0.0.0 \
+  --port 8000
+
+test vllm:
+curl http://127.0.0.1:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+        "model": "model/Qwen2-VL-7B/final_model",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              { "type": "text", "text": "Detect the nutrition table bounding box." },
+              {
+                "type": "image_url",
+                "image_url": { "url": "https://static.openfoodfacts.org/images/products/27563564/2.jpg" }
+              }
+            ]
+          }
+        ],
+        "max_tokens": 300,
+        "temperature": 0.0
+      }'
+
+archive env:
+tar -czf venv_backup.tar.gz .venv
+rm -rf .venv
+re-install:
+tar -xzf venv_backup.tar.gz
+
+
 
  pip install -r projects/nutrition-table/requirements.txt
 
@@ -7,6 +46,8 @@ source /workspace/projects/nutrition-table3/.venv/bin/activate
  accelerate launch --mixed_precision=bf16 /workspace/projects/nutrition-table/src/train.py --config configs/exp1.yaml
   accelerate launch --mixed_precision=bf16 src/train.py --config configs/exp3.yaml
   accelerate launch --multi_gpu --mixed_precision=bf16 src/train.py --config configs/exp10_merge_test_repro.yaml
+    accelerate launch --multi_gpu --mixed_precision=bf16 src/train.py --config configs/exp12.yaml
+
 
   accelerate launch --num_processes=1 --mixed_precision=bf16 src/train.py --config configs/exp7_2.yaml
 

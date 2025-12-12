@@ -1,92 +1,3 @@
-experiment: exp10_merge_test_repro
-
-model_id: "Qwen/Qwen2-VL-7B-Instruct"
-
-min_pixels: 784
-max_pixels: 705600
-max_seq_length: 512
-warmup_steps: 100
-
-# min_pixels: 50176
-# max_pixels: 705600
-# max_seq_length: 1024
-# warmup_ratio: 0.03
-
-eval_strategy: "steps"
-eval_steps: 80
-save_strategy: "steps"
-save_steps: 80
-logging_steps: 80
-load_best_model_at_end: true
-
-use_flash: true
-format_data: true
-collator:
-  enabled: true
-  numeric_only: false
-
-# debug:
-#   train_subset: 100
-#   val_subset: 20
-#   wandb_suffix: "-merge_repro"
-#   wandb_tags: ["merge", "repro"]
-
-# debug:
-#   dataset_subset: 20
-#   wandb_suffix: "-mergecheck"
-#   wandb_tags: ["mergecheck"]
-
-# debug_eval: true
-# debug_eval_limit: 5
-
-# continue_from_merged: true
-
-stages:
-  # Stage 1 – vision warmup (last 8 blocks only)
-  - name: exp10_visio_warmup_merge_test_repro_14
-    batch_size: 4
-    grad_accum_steps: 4
-    lr: 0.0001
-    epochs: 3
-    lora_r: 8
-    lora_alpha: 16
-    lora_dropout: 0.1
-    lr_scheduler_type: "constant"
-    regex_targets:
-      - "visual\\.blocks\\.(2[3-9]|30)\\.attn\\.(qkv|proj)"
-
-  # Stage 2 – full vision encoder
-  - name: exp10_full_visio_merge_test_repro_14
-    batch_size: 2
-    grad_accum_steps: 8
-    lr: 0.0002
-    epochs: 6
-    lora_r: 16
-    lora_alpha: 32
-    lora_dropout: 0.1
-    lr_scheduler_type: "constant"
-    regex_targets:
-      - "visual\\.blocks\\.\\d+\\.attn\\.(qkv|proj)"
-      - "visual\\.blocks\\.\\d+\\.mlp\\.(fc1|fc2)"
-      - "visual\\.merger\\.mlp\\.[02]"
-
-  # Stage 3 – joint training (vision + language)
-  - name: exp10_joint_merge_test_repro_14
-    batch_size: 1
-    grad_accum_steps: 16
-    lr: 0.00002
-    epochs: 6
-    lora_r: 16
-    lora_alpha: 32
-    lora_dropout: 0.1
-    lr_scheduler_type: "linear"
-    regex_targets:
-      - "visual\\.blocks\\.\\d+\\.attn\\.(qkv|proj)"
-      - "visual\\.blocks\\.\\d+\\.mlp\\.(fc1|fc2)"
-      - "visual\\.merger\\.mlp\\.[02]"
-      - "self_attn\\.(q_proj|k_proj|v_proj|o_proj)"
-      - "mlp\\.(gate_proj|up_proj|down_proj)"
-
 # _merge_test_repro_0: original merge function which had produced different mean_iou for merged and non_merged in exp10-2
                       # def merge_adapters_to_base(model_id: str, adapter_dir: str, dtype=torch.bfloat16):
                       #     base_with_adapters, _ = load_model(model_id=model_id, dtype=dtype,
@@ -224,25 +135,42 @@ stages:
     #tested 1B (grad_accum_steps to 4,8,16) vs 2B (grad_accum_steps to 8,16,32)
     # 1 GPU vs 2 GPU:
 
-# _merge_test_repro_9: 1B, 1 GPU:
+# _merge_test_repro_15: 1B, 1 GPU
+                          # RTX PRO 6000 WK
+                          # run 1211_1856
+                          # time: 60 + 72 + 100 = 232
+                          # eval mean_iou: ? --> 0.904 --> 0.905 to 0.88
+
+# _merge_test_repro_9: 1B, 2 GPU
+                          # RTX PRO 6000
                           # run 1023_0003
+                          # time: 24 + 31 + 42 = 97 min
                           # eval mean_iou: 0.76 --> 0.85 --> 0.87
 
-# _merge_test_repro_10:  2B, 2 GPU:
-                          # run 1023_1200
-                          # eval mean_iou: ? --> 0.85 --> 0.73
+# _merge_test_repro_10:  2B, 2 GPU
+                          # RTX PRO 6000
+                          # run 
+                          # time: 
+                          # eval mean_iou: 
 
-# _merge_test_repro_11: 2B, 1 GPU: 150min
+# _merge_test_repro_11: 2B, 1 GPU
+                          # RTX PRO 6000
                           # run 1023_1553
-                          # eval mean_iou: 0.76 --> 0.88 --> 0.89
+                          # time: 21 + 55 + 74 = 150 min
+                          # eval mean_iou: 0.76 --> 0.879 --> 0.886
 
-# _merge_test_repro_12: 1B, 2 GPU: 89min
+# _merge_test_repro_12: 1B, 2 GPU
+                          # RTX PRO 6000
                           # run 1023_2035
-                          # eval mean_iou: 0.75 --> 0.85 --> 0.89
+                          # time: 15 + 31 + 43 = 89 min
+                          # eval mean_iou: 0.75 --> 0.852 --> 0.893
 
 # _merge_test_repro_14: 1B, 2 GPU, double lrs
+                          # RTX PRO 6000
+                          # run 1111_0036
+                          # time: 36 + 34 + 42 = 112 min
+                          # eval mean_iou: 0.74 --> 0.897 --> 0.89
 
-
-                          
-
-                          
+# exp12:                1B, 1GPU, just stage 2
+                          # time: 70
+                          # eval mean_iou: 0.909
