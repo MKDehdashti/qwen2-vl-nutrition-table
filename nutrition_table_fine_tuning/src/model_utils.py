@@ -1,4 +1,4 @@
-# src_combo/model_utils
+# model_utils
 import os, json, re, torch
 from transformers import Qwen2VLForConditionalGeneration, Qwen2VLProcessor, BitsAndBytesConfig
 os.environ["PEFT_BACKEND"] = "HF"
@@ -14,8 +14,12 @@ lora_config = LoraConfig(
     target_modules=[]
 )
 
-def load_processor_fixed(model_id: str, min_pixels: int = 224*224, max_pixels: int = 900*28*28):
+def load_processor_fixed(model_id: str, cfg=None, min_pixels: int = 224*224, max_pixels: int = 900*28*28):
+    if cfg is not None:
+        min_pixels = cfg.get("min_pixels", min_pixels)
+        max_pixels = cfg.get("max_pixels", max_pixels)
     return Qwen2VLProcessor.from_pretrained(model_id, min_pixels=min_pixels, max_pixels=max_pixels)
+
 
 def save(trainer, processor, training_args, metrics=None, tag=None):
     if trainer is not None:
@@ -67,11 +71,8 @@ def load_model(model_id: str, dtype=torch.float32, quantized=False,
         attn_implementation="flash_attention_2" if use_flash else "eager",
     )
 
-    processor = load_processor_fixed(
-        model_id=model_id,
-        min_pixels=cfg.get("debug", {}).get("min_pixels", 224*224) if cfg else 224*224,
-        max_pixels=cfg.get("debug", {}).get("max_pixels", 900*28*28) if cfg else 900*28*28
-    )
+    processor = load_processor_fixed(model_id=model_id, cfg=cfg)
+
 
     if merged or not use_adapters or not from_dir:
         return base, processor

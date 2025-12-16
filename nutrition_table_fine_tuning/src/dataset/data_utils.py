@@ -1,7 +1,6 @@
 import os, torch, random, numpy as np, re
 from datasets import load_dataset
 
-# reproducibility
 torch.manual_seed(0); torch.cuda.manual_seed_all(0)
 np.random.seed(0); random.seed(0)
 torch.backends.cudnn.deterministic = True
@@ -9,17 +8,13 @@ torch.backends.cudnn.benchmark = False
 
 dataset_id = "openfoodfacts/nutrition-table-detection"
 
-# -------------------------
-#   SYSTEM PROMPT
-# -------------------------
 system_message = """You are a Vision Language Model specialized in interpreting visual data from product images.
 Your task is to analyze the provided product images and detect the nutrition tables in a certain format.
 Focus on delivering accurate, succinct answers based on the visual information. Avoid additional explanation unless absolutely necessary."""
 
-# -------------------------
-#   FORMAT DATA
-# -------------------------
-def format_data(sample, label="nutrition-table"):
+def format_data(sample, cfg, label="nutrition-table"):
+    prompt = cfg["task_prompt"]
+
     objects = sample.get("objects", {})
     bboxes = objects.get("bbox", [])
     annotations = []
@@ -42,33 +37,22 @@ def format_data(sample, label="nutrition-table"):
             "role": "user",
             "content": [
                 {"type": "image", "image": sample["image"]},
-                {"type": "text", "text": "Detect the bounding box of the nutrition table."},
+                {"type": "text", "text": prompt},
             ],
         },
         {"role": "assistant", "content": assistant_text},
     ]
-
     return {"messages": messages}
 
-# -------------------------
-#   PARSE BOXES
-# -------------------------
 def parse_boxes_from_text(text: str):
     matches = re.findall(r"\((\d+),\s*(\d+)\),\((\d+),\s*(\d+)\)", text)
     return [[float(x0), float(y0), float(x1), float(y1)] for x0, y0, x1, y1 in matches]
 
-# -------------------------
-#   LOAD + FORMAT DATASETS
-# -------------------------
-def get_datasets(format_data_flag=True):
-    # fresh download each run
+def get_datasets(cfg, format_data_flag=True):
     raw = load_dataset(dataset_id)
-
     if format_data_flag:
-        # completely avoid Arrow/map — build plain Python lists
-        train = [format_data(ex) for ex in raw["train"]]
-        val = [format_data(ex) for ex in raw["val"]]
+        train = [format_data(ex, cfg) for ex in raw["train"]]
+        val = [format_data(ex, cfg) for ex in raw["val"]]
     else:
         train, val = raw["train"], raw["val"]
-
     return train, val

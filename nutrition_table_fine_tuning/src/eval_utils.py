@@ -1,3 +1,4 @@
+# eval_utils.py
 import os, torch, matplotlib.pyplot as plt
 from torchvision.ops import box_iou
 from viz_utils import run_inference_strict
@@ -14,8 +15,10 @@ def evaluate_model(
     training_args=None,
     plot=True,
 ):
+    if not isinstance(cfg, dict) or "task_prompt" not in cfg:
+        raise ValueError("cfg must include task_prompt")
+
     model.eval()
-    device = next(model.parameters()).device
 
     if dataset is None:
         raise ValueError("Dataset must be provided to avoid redundant loading.")
@@ -31,24 +34,23 @@ def evaluate_model(
         gt_text = ""
         if msgs and msgs[-1]["role"] == "assistant":
             content = msgs[-1]["content"]
-            if isinstance(content, list) and len(content) > 0 and "text" in content[0]:
+            if isinstance(content, list) and len(content) > 0 and isinstance(content[0], dict) and "text" in content[0]:
                 gt_text = content[0]["text"]
             elif isinstance(content, str):
                 gt_text = content
 
         gt_boxes = parse_boxes_from_text(gt_text)
 
-        # extract image from messages
         image = None
         for c in msgs[1]["content"]:
-            if c["type"] == "image":
-                image = c["image"]
+            if c.get("type") == "image":
+                image = c.get("image")
 
         metrics = run_inference_strict(
             model,
             processor=processor,
             image_or_url=image,
-            prompt="Detect the bounding box of the nutrition table.",
+            cfg=cfg,
             dtype=getattr(model, "dtype", torch.float32),
         )
         if metrics is None:
@@ -60,8 +62,10 @@ def evaluate_model(
         if gt_boxes and pred_boxes:
             gt_t = torch.tensor(gt_boxes, dtype=torch.float32)
             pr_t = torch.tensor(pred_boxes, dtype=torch.float32)
-            if gt_t.ndim == 1: gt_t = gt_t.unsqueeze(0)
-            if pr_t.ndim == 1: pr_t = pr_t.unsqueeze(0)
+            if gt_t.ndim == 1:
+                gt_t = gt_t.unsqueeze(0)
+            if pr_t.ndim == 1:
+                pr_t = pr_t.unsqueeze(0)
 
             ious_mat = box_iou(gt_t, pr_t)
             best_gt = ious_mat.max(dim=1)[0]
@@ -85,10 +89,14 @@ def evaluate_model(
         results.append(metrics)
 
     out = {}
-    if ious: out["mean_iou"] = sum(ious) / len(ious)
-    if precisions: out["precision@0.5"] = sum(precisions) / len(precisions)
-    if recalls: out["recall@0.5"] = sum(recalls) / len(recalls)
-    if f1s: out["f1@0.5"] = sum(f1s) / len(f1s)
+    if ious:
+        out["mean_iou"] = sum(ious) / len(ious)
+    if precisions:
+        out["precision@0.5"] = sum(precisions) / len(precisions)
+    if recalls:
+        out["recall@0.5"] = sum(recalls) / len(recalls)
+    if f1s:
+        out["f1@0.5"] = sum(f1s) / len(f1s)
 
     if plot and results and training_args:
         precisions_curve = [m.get("precision", 0.0) for m in results]

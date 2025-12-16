@@ -1,3 +1,5 @@
+# train.py
+
 import os, json, yaml, torch
 from datetime import datetime
 from accelerate import PartialState
@@ -91,8 +93,8 @@ if __name__ == "__main__":
         train_raw = raw["train"].select(range(dbg.get("dataset_subset", 20)))
         val_raw = raw["val"].select(range(dbg.get("dataset_subset", 20)))
         if cfg.get("format_data", False):
-            train_ds = [format_data(ex) for ex in train_raw]
-            test_ds = [format_data(ex) for ex in val_raw]
+            train_ds = [format_data(ex, cfg) for ex in train_raw]
+            test_ds = [format_data(ex, cfg) for ex in val_raw]
         else:
             train_ds, test_ds = train_raw, val_raw
         if "wandb" not in cfg:
@@ -100,7 +102,7 @@ if __name__ == "__main__":
         cfg["wandb"]["name"] = cfg["wandb"].get("name", cfg["experiment"]) + dbg.get("wandb_suffix", "-debug")
         cfg["wandb"]["tags"] = cfg["wandb"].get("tags", []) + dbg.get("wandb_tags", ["debug"])
     else:
-        train_ds, test_ds = get_datasets(format_data_flag=cfg.get("format_data", False))
+        train_ds, test_ds = get_datasets(cfg, format_data_flag=cfg.get("format_data", False))
 
     proj_root = get_proj_root()
     runs_root = os.path.join(proj_root, "runs")
@@ -114,7 +116,7 @@ if __name__ == "__main__":
     os.environ["WANDB_DIR"] = os.path.join(run_dir, "wandb")
     os.makedirs(os.environ["WANDB_DIR"], exist_ok=True)
 
-    processor = load_processor_fixed(model_id=cfg["model_id"])
+    processor = load_processor_fixed(model_id=cfg["model_id"], cfg=cfg)
     prev_dir = None
 
     subset_size = cfg.get("eval_subset_size", 12)
@@ -207,7 +209,7 @@ if __name__ == "__main__":
             args=training_args,
             train_dataset=train_ds,
             eval_dataset=test_ds,
-            data_collator=lambda ex: collate_fn(ex, processor, numeric_only=numeric_only),
+            data_collator=lambda ex: collate_fn(ex, processor, cfg=cfg, numeric_only=numeric_only),
             peft_config=peft_cfg,
             callbacks=[WandBLossCallback(), EarlyStoppingCallback(early_stopping_patience=3, early_stopping_threshold=0.001)],
             compute_metrics=make_compute_metrics(base_model, processor, cfg, training_args, eval_subset),
