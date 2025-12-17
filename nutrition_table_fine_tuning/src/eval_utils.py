@@ -34,9 +34,7 @@ def evaluate_model(
         gt_text = ""
         if msgs and msgs[-1]["role"] == "assistant":
             content = msgs[-1]["content"]
-            if isinstance(content, list) and len(content) > 0 and isinstance(content[0], dict) and "text" in content[0]:
-                gt_text = content[0]["text"]
-            elif isinstance(content, str):
+            if isinstance(content, str):
                 gt_text = content
 
         gt_boxes = parse_boxes_from_text(gt_text)

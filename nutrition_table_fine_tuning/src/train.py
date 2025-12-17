@@ -1,13 +1,12 @@
 # train.py
-
-import os, json, yaml, torch
+import os, yaml, torch
 from datetime import datetime
 from accelerate import PartialState
 from trl import SFTConfig, SFTTrainer
-from peft import LoraConfig
+from peft import LoraConfig, PeftModel
 from dataset.data_utils import get_datasets, format_data
 from dataset.collators import collate_fn
-from model_utils import save, load_model, get_matching_modules, load_processor_fixed, merge_adapters_to_base
+from model_utils import save, load_model, get_matching_modules, load_processor_fixed
 from eval_utils import evaluate_model
 from wandb_utils import init_wandb, WandBLossCallback
 from cleanup import clean_cache
@@ -49,26 +48,6 @@ def deep_merge(base, override):
         else:
             merged[k] = v
     return merged
-
-def make_compute_metrics(model, processor, cfg, training_args, eval_subset):
-    def compute_metrics(eval_pred):
-        metrics = evaluate_model(
-            model,
-            processor=processor,
-            dataset=eval_subset,
-            strict=True,
-            tag="eval_subset",
-            cfg=cfg,
-            training_args=training_args,
-            plot=False,
-        )
-        return {
-            "mean_iou": metrics.get("mean_iou", 0.0),
-            "precision@0.5": metrics.get("precision@0.5", 0.0),
-            "recall@0.5": metrics.get("recall@0.5", 0.0),
-            "f1@0.5": metrics.get("f1@0.5", 0.0),
-        }
-    return compute_metrics
 
 if __name__ == "__main__":
     import argparse
@@ -146,7 +125,7 @@ if __name__ == "__main__":
             output_dir=out_dir,
             num_train_epochs=stage["epochs"],
             per_device_train_batch_size=stage["batch_size"],
-            per_device_eval_batch_size=stage["batch_size"],
+            per_device_eval_batch_size=stage.get("eval_batch_size", stage["batch_size"]),
             gradient_accumulation_steps=stage["grad_accum_steps"],
             learning_rate=float(stage["lr"]),
             gradient_checkpointing=True,
@@ -183,7 +162,9 @@ if __name__ == "__main__":
             task_type="CAUSAL_LM",
             target_modules=get_matching_modules(clean_base, regex_targets),
         )
-        del clean_base; torch.cuda.empty_cache()
+        del clean_base
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         if stage_idx == 0:
             print(f"\n=== Stage: {name} (starting from base model) ===")
@@ -191,8 +172,6 @@ if __name__ == "__main__":
         else:
             print(f"\n=== Stage: {name} (starting from merged model of {prev_dir}) ===")
             base_model, _ = load_model(model_id=cfg["model_id"], dtype=torch.bfloat16, use_adapters=False, from_dir=prev_dir, cfg=cfg)
-
-
 
         if is_main:
             init_wandb(run_id, training_args, peft_cfg, stage_name=name, exp_name=exp_name)
@@ -212,14 +191,14 @@ if __name__ == "__main__":
             data_collator=lambda ex: collate_fn(ex, processor, cfg=cfg, numeric_only=numeric_only),
             peft_config=peft_cfg,
             callbacks=[WandBLossCallback(), EarlyStoppingCallback(early_stopping_patience=3, early_stopping_threshold=0.001)],
-            compute_metrics=make_compute_metrics(base_model, processor, cfg, training_args, eval_subset),
+            compute_metrics=None,
             processing_class=processor,
         )
 
         trainer.train()
 
         full_metrics = evaluate_model(
-            base_model,
+            trainer.model,
             processor=processor,
             dataset=test_ds,
             n=123,
@@ -229,14 +208,22 @@ if __name__ == "__main__":
             training_args=training_args,
             plot=False,
         )
-        print(f"\n📊 Stage {name} full evaluation:")
+        print(f"\n📊 Stage {name} full evaluation (pre-merge):")
         print(full_metrics)
         if wandb.run is not None:
-            wandb.log(full_metrics, step=trainer.state.global_step)
+            wandb.log(full_metrics)
 
         save(trainer, None, training_args)
 
-        merge_adapters_to_base(cfg["model_id"], out_dir, dtype=torch.bfloat16)
+        if not isinstance(trainer.model, PeftModel):
+            raise ValueError("Trainer model is not a PeftModel; nothing to merge.")
+
+        merged = trainer.model.merge_and_unload()
+        merged_out = os.path.join(out_dir, "merged")
+        os.makedirs(merged_out, exist_ok=True)
+        merged.save_pretrained(merged_out, safe_serialization=True)
+        print(f"✅ Merged model saved to {merged_out}")
+
         merged_model, _ = load_model(model_id=cfg["model_id"], dtype=torch.bfloat16, use_adapters=False, from_dir=out_dir, cfg=cfg)
         merged_metrics = evaluate_model(
             merged_model,
@@ -252,10 +239,14 @@ if __name__ == "__main__":
         print(f"\n📊 Stage {name} merged evaluation:")
         print(merged_metrics)
         if wandb.run is not None:
-            wandb.log(merged_metrics, step=trainer.state.global_step + 1)
+            wandb.log(merged_metrics)
 
-        del merged_model; del base_model
-        torch.cuda.empty_cache()
+        del merged_model
+        del merged
+        del trainer
+        del base_model
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         clean_cache(deep=False)
 
         if is_main:

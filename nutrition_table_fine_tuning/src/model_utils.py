@@ -85,17 +85,17 @@ def load_model(model_id: str, dtype=torch.float32, quantized=False,
     model = PeftModel.from_pretrained(base, from_dir)
     return model, processor
 
-def merge_adapters_to_base(model_id: str, adapter_dir: str, dtype=torch.bfloat16):
-    base_with_adapters, _ = load_model(model_id=model_id, dtype=dtype,
-                                       use_adapters=True, from_dir=adapter_dir)
-    if not isinstance(base_with_adapters, PeftModel):
-        raise ValueError(f"No adapters to merge at {adapter_dir}")
-    merged = base_with_adapters.merge_and_unload()
-    out = os.path.join(adapter_dir, "merged")
-    os.makedirs(out, exist_ok=True)
-    merged.save_pretrained(out, safe_serialization=True)
-    print(f"✅ Merged model saved to {out}")
-    return out
+# def merge_adapters_to_base(model_id: str, adapter_dir: str, dtype=torch.bfloat16):
+#     base_with_adapters, _ = load_model(model_id=model_id, dtype=dtype,
+#                                        use_adapters=True, from_dir=adapter_dir)
+#     if not isinstance(base_with_adapters, PeftModel):
+#         raise ValueError(f"No adapters to merge at {adapter_dir}")
+#     merged = base_with_adapters.merge_and_unload()
+#     out = os.path.join(adapter_dir, "merged")
+#     os.makedirs(out, exist_ok=True)
+#     merged.save_pretrained(out, safe_serialization=True)
+#     print(f"✅ Merged model saved to {out}")
+#     return out
 
 def get_matching_modules(model, regex_list):
     names = [n for n, _ in model.named_modules()]

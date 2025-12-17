@@ -1,5 +1,5 @@
 # Commands
-source /workspace/projects/nutrition_table_fine_tuning/.venv/bin/activate
+source /workspace/projects/nutrition_table/nutrition_table_fine_tuning/.venv/bin/activate
 source /workspace/projects/nutrition_table_inference/env_infer/bin/activate
 
 vllm serve model/Qwen2-VL-7B/final_model --dtype bfloat16
@@ -46,10 +46,10 @@ tar -xzf venv_backup.tar.gz
  accelerate launch --mixed_precision=bf16 /workspace/projects/nutrition-table/src/train.py --config configs/exp1.yaml
   accelerate launch --mixed_precision=bf16 src/train.py --config configs/exp3.yaml
   accelerate launch --multi_gpu --mixed_precision=bf16 src/train.py --config configs/exp10_merge_test_repro.yaml
-    accelerate launch --multi_gpu --mixed_precision=bf16 src/train.py --config configs/exp12.yaml
+    accelerate launch --multi_gpu --mixed_precision=bf16 src/train.py --config configs/exp13_debug.yaml
 
 
-  accelerate launch --num_processes=1 --mixed_precision=bf16 src/train.py --config configs/exp7_2.yaml
+  accelerate launch --num_processes=1 --mixed_precision=bf16 src/train.py --config configs/ex7_2.yaml
 
 
   python src_comb/train.py --config configs/exp10-2.yaml

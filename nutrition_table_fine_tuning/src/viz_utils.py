@@ -32,10 +32,10 @@ def run_inference_strict(model, processor, image_or_url, cfg=None, max_new_token
     image = _load_image(image_or_url)
 
     sys_msg = inf_cfg.get("system_message", None) or TRAIN_SYSTEM_MESSAGE
-    prompt = cfg["task_prompt"]
+    prompt = inf_cfg.get("task_prompt", cfg["task_prompt"])
 
     max_new_tokens = int(inf_cfg.get("max_new_tokens", max_new_tokens))
-    max_len = int(inf_cfg.get("max_seq_length", cfg.get("max_seq_length", 1024)))
+    max_len = inf_cfg.get("max_seq_length", cfg.get("max_seq_length", None))
     pad_to_multiple_of = inf_cfg.get("pad_to_multiple_of", cfg.get("pad_to_multiple_of", None))
 
     messages = [
@@ -49,16 +49,17 @@ def run_inference_strict(model, processor, image_or_url, cfg=None, max_new_token
     text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     pixel_inputs, _ = process_vision_info(messages)
 
-    inputs = processor(
+    proc_kwargs = dict(
         text=[text],
         images=pixel_inputs,
         return_tensors="pt",
         padding=True,
-        truncation=True,
-        max_length=max_len,
         pad_to_multiple_of=pad_to_multiple_of,
         add_special_tokens=False,
     )
+    if max_len is not None:
+        proc_kwargs.update(truncation=True, max_length=int(max_len))
+    inputs = processor(**proc_kwargs)
 
     for k, v in inputs.items():
         if torch.is_floating_point(v):

@@ -1,0 +1,99 @@
+experiment: exp13 # exp12 with max_seq_length implemented, and using pad_to_multiple_of
+                  # changed viz_utils and eval_utils to handle multi bboxes better
+                  # changed prompt to handle multiple bboxes, made it the same all over and defined only in yaml
+
+model_id: "Qwen/Qwen2-VL-7B-Instruct"
+
+task_prompt: "Detect the bounding boxes of all nutrition tables in the image. Output one or more boxes in the format: <|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(x0, y0),(x1, y1)<|box_end|>. If multiple, repeat the same pattern separated by spaces. If none, output: No table found."
+
+
+min_pixels: 784
+max_pixels: 705600
+max_seq_length: 2048
+warmup_steps: 100
+pad_to_multiple_of: 8 # added to exp13 onward
+mask_prompt_labels: false
+
+inference:
+  quantized: false
+  max_new_tokens: 512
+  max_seq_length: 2048
+  pad_to_multiple_of: 8
+  # system_message: ""   # optional; if empty, uses training system_message
+  # prompt: ""           # optional; if empty, uses the passed prompt
+  # do_sample: false
+  # temperature: 0.0
+  # top_p: 0.9
+
+
+eval_strategy: "steps"
+eval_steps: 80
+save_strategy: "steps"
+save_steps: 80
+logging_steps: 80
+load_best_model_at_end: true
+
+use_flash: true
+format_data: true
+collator:
+  enabled: true
+  numeric_only: false
+
+# debug controls
+debug:
+  dataset_subset: 30
+  wandb_suffix: "-debug"
+  wandb_tags: ["debug"]
+
+debug_eval: true
+debug_eval_limit: 3
+
+stages:
+  # Stage 1 – vision warmup (last 8 blocks only)
+  # - name: exp10_visio_warmup_merge_test_repro_15
+  #   batch_size: 4
+  #   grad_accum_steps: 4
+  #   lr: 0.00005
+  #   epochs: 3
+  #   lora_r: 1
+  #   lora_alpha: 1
+  #   lora_dropout: 0.1
+  #   lr_scheduler_type: "constant"
+  #   regex_targets:
+  #     - "visual\\.blocks\\.(2[3-9]|30)\\.attn\\.(qkv|proj)"
+
+  # Stage 2 – full vision encoder
+  - name: exp13_full_visio
+    batch_size: 2
+    grad_accum_steps: 8
+    lr: 0.0001
+    epochs: 6
+    lora_r: 1
+    lora_alpha: 1
+    lora_dropout: 0.1
+    lr_scheduler_type: "constant"
+    regex_targets:
+      - "visual\\.blocks\\.30\\.attn\\.(qkv|proj)"   # only last vision layer
+
+  # Stage 3 – joint training (vision + language)
+  - name: exp10_joint_merge_test_repro_15
+    batch_size: 1
+    grad_accum_steps: 16
+    lr: 0.00001
+    epochs: 6
+    lora_r: 1
+    lora_alpha: 1
+    lora_dropout: 0.1
+    lr_scheduler_type: "linear"
+    regex_targets:
+      - "visual\\.blocks\\.\\d+\\.attn\\.(qkv|proj)"
+      - "visual\\.blocks\\.\\d+\\.mlp\\.(fc1|fc2)"
+      - "visual\\.merger\\.mlp\\.[02]"
+      - "self_attn\\.(q_proj|k_proj|v_proj|o_proj)"
+      - "mlp\\.(gate_proj|up_proj|down_proj)"
+
+
+
+                          
+
+                          

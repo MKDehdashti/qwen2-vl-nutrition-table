@@ -1,10 +1,10 @@
-# collators.py
+# dataset/collators.py
 import torch, re
 from qwen_vl_utils import process_vision_info
 
 def collate_fn(examples, processor, cfg=None, numeric_only=False):
     cfg = cfg or {}
-    max_len = int(cfg.get("max_seq_length", 1024))
+    max_len = cfg.get("max_seq_length", None)
     pad_to_multiple_of = cfg.get("pad_to_multiple_of", None)
     mask_prompt_labels = bool(cfg.get("mask_prompt_labels", False))
 
@@ -22,24 +22,23 @@ def collate_fn(examples, processor, cfg=None, numeric_only=False):
 
         if mask_prompt_labels:
             prompt_text = processor.apply_chat_template(messages[:-1], tokenize=False, add_generation_prompt=True)
-            prompt_ids = tok(
-                prompt_text,
-                add_special_tokens=False,
-                truncation=True,
-                max_length=max_len,
-            )["input_ids"]
+            tok_kwargs = dict(add_special_tokens=False)
+            if max_len is not None:
+                tok_kwargs.update(truncation=True, max_length=int(max_len))
+            prompt_ids = tok(prompt_text, **tok_kwargs)["input_ids"]
             prompt_lens.append(len(prompt_ids))
 
-    batch = processor(
+    proc_kwargs = dict(
         text=texts,
         images=images,
         return_tensors="pt",
         padding=True,
-        truncation=True,
-        max_length=max_len,
         pad_to_multiple_of=pad_to_multiple_of,
         add_special_tokens=False,
     )
+    if max_len is not None:
+        proc_kwargs.update(truncation=True, max_length=int(max_len))
+    batch = processor(**proc_kwargs)
 
     labels = batch["input_ids"].clone()
 
