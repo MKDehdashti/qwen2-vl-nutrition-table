@@ -137,9 +137,12 @@
 
 # _merge_test_repro_15: 1B, 1 GPU
                           # RTX PRO 6000 WK
-                          # run 1211_1856
-                          # time: 60 + 72 + 100 = 232
-                          # eval mean_iou: ? --> 0.904 --> 0.905 to 0.88
+                          # run 1217-1845
+                          # time: 980 + 2722 + 3493 = 120 min
+                          # mean_iou:
+                                     # stage 1: 0.63
+                                     # stage 2: 0.839
+                                     # stage 3: 0.845
 
 # _merge_test_repro_9: 1B, 2 GPU
                           # RTX PRO 6000
@@ -167,10 +170,10 @@
 
 # _merge_test_repro_14: 1B, 2 GPU, double lrs
                           # RTX PRO 6000
-                          # run 1111_0036
-                          # time: 36 + 34 + 42 = 112 min
-                          # eval mean_iou: 0.74 --> 0.897 --> 0.89
+                          # run
+                          # time:
+                          # mean_iou:
 
 # exp12:                1B, 1GPU, just stage 2
-                          # time: 70
-                          # eval mean_iou: 0.909
+                          # time:
+                          # eval mean_iou:

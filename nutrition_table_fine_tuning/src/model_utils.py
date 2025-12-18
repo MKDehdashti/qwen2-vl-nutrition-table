@@ -18,7 +18,7 @@ def load_processor_fixed(model_id: str, cfg=None, min_pixels: int = 224*224, max
     if cfg is not None:
         min_pixels = cfg.get("min_pixels", min_pixels)
         max_pixels = cfg.get("max_pixels", max_pixels)
-    return Qwen2VLProcessor.from_pretrained(model_id, min_pixels=min_pixels, max_pixels=max_pixels)
+    return Qwen2VLProcessor.from_pretrained(model_id, min_pixels=fmin_pixels, max_pixels=max_pixels)
 
 
 def save(trainer, processor, training_args, metrics=None, tag=None):

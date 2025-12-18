@@ -1,4 +1,4 @@
-experiment: exp10_merge_test_repro
+experiment: exp10_merge_test_repro_251217commit
 
 model_id: "Qwen/Qwen2-VL-7B-Instruct"
 
@@ -43,7 +43,7 @@ collator:
 
 stages:
   # Stage 1 – vision warmup (last 8 blocks only)
-  - name: exp10_visio_warmup_merge_test_repro_15
+  - name: exp10_15_visio_warmup_mod251217
     batch_size: 4
     grad_accum_steps: 4
     lr: 0.00005
@@ -56,7 +56,7 @@ stages:
       - "visual\\.blocks\\.(2[3-9]|30)\\.attn\\.(qkv|proj)"
 
   # Stage 2 – full vision encoder
-  - name: exp10_full_visio_merge_test_repro_15
+  - name: exp10_15_full_visio_mod251217
     batch_size: 2
     grad_accum_steps: 8
     lr: 0.0001
@@ -71,7 +71,7 @@ stages:
       - "visual\\.merger\\.mlp\\.[02]"
 
   # Stage 3 – joint training (vision + language)
-  - name: exp10_joint_merge_test_repro_15
+  - name: exp10_15_joint_mod251217
     batch_size: 1
     grad_accum_steps: 16
     lr: 0.00001

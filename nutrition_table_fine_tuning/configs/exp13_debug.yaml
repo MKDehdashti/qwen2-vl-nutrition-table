@@ -63,7 +63,7 @@ stages:
   #     - "visual\\.blocks\\.(2[3-9]|30)\\.attn\\.(qkv|proj)"
 
   # Stage 2 – full vision encoder
-  - name: exp13_full_visio
+  - name: exp13_full_vision
     batch_size: 2
     grad_accum_steps: 8
     lr: 0.0001
@@ -76,7 +76,7 @@ stages:
       - "visual\\.blocks\\.30\\.attn\\.(qkv|proj)"   # only last vision layer
 
   # Stage 3 – joint training (vision + language)
-  - name: exp10_joint_merge_test_repro_15
+  - name: exp13_joint
     batch_size: 1
     grad_accum_steps: 16
     lr: 0.00001

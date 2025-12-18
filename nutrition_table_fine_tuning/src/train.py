@@ -49,6 +49,29 @@ def deep_merge(base, override):
             merged[k] = v
     return merged
 
+def make_compute_metrics(model_getter, processor, cfg, training_args, eval_subset):
+    def compute_metrics(eval_pred):
+        model = model_getter()  
+        metrics = evaluate_model(
+            model,
+            processor=processor,
+            dataset=eval_subset,
+            n=len(eval_subset),   
+            strict=True,
+            tag="hf_eval_subset",
+            cfg=cfg,
+            training_args=training_args,
+            plot=False,
+        )
+        return {
+            "mean_iou": metrics.get("mean_iou", 0.0),
+            "precision@0.5": metrics.get("precision@0.5", 0.0),
+            "recall@0.5": metrics.get("recall@0.5", 0.0),
+            "f1@0.5": metrics.get("f1@0.5", 0.0),
+        }
+    return compute_metrics
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
@@ -98,11 +121,19 @@ if __name__ == "__main__":
     processor = load_processor_fixed(model_id=cfg["model_id"], cfg=cfg)
     prev_dir = None
 
-    subset_size = cfg.get("eval_subset_size", 12)
-    if hasattr(test_ds, "select"):
-        eval_subset = [test_ds[i] for i in range(min(subset_size, len(test_ds)))]
-    else:
-        eval_subset = test_ds[:subset_size]
+    subset_size = cfg.get("eval_subset_size", None)
+    eval_subset = None
+    if subset_size is not None:
+        subset_size = int(subset_size)
+        if subset_size > 0:
+            if hasattr(test_ds, "select"):
+                # HF Dataset
+                eval_subset = test_ds.select(range(min(subset_size, len(test_ds))))
+            else:
+                # Python list
+                eval_subset = test_ds[:subset_size]
+        else:
+            eval_subset = None
 
     if args.pre_viz and args.pre_viz.lower() != "none":
         try:
@@ -193,6 +224,14 @@ if __name__ == "__main__":
             callbacks=[WandBLossCallback(), EarlyStoppingCallback(early_stopping_patience=3, early_stopping_threshold=0.001)],
             compute_metrics=None,
             processing_class=processor,
+        )
+
+        trainer.compute_metrics = make_compute_metrics(
+            model_getter=lambda: trainer.model,
+            processor=processor,
+            cfg=cfg,
+            training_args=training_args,
+            eval_subset=eval_subset,
         )
 
         trainer.train()

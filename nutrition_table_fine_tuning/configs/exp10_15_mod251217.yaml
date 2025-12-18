@@ -1,0 +1,89 @@
+experiment: exp10_15_joint_mod251217
+
+model_id: "Qwen/Qwen2-VL-7B-Instruct"
+task_prompt: "Detect the bounding boxes of all nutrition tables in the image."
+
+min_pixels: 784
+max_pixels: 705600
+
+# CHANGED: remove max_seq_length to avoid truncation/image-token mismatch
+# max_seq_length: 2048
+
+warmup_steps: 100
+pad_to_multiple_of: 8
+mask_prompt_labels: false
+
+eval_subset_size: 12
+
+inference:
+  quantized: false
+  # max_new_tokens: 64
+  # CHANGED: remove max_seq_length so inference won't truncate either
+  # max_seq_length: 2048
+  task_prompt: "Detect the bounding boxes of all nutrition tables in the image."
+  do_sample: false
+
+eval_strategy: "steps"
+eval_steps: 120
+save_strategy: "steps"
+save_steps: 120
+logging_steps: 120
+load_best_model_at_end: true
+
+use_flash: true
+format_data: true
+collator:
+  enabled: true
+  numeric_only: false
+
+stages:
+  # Stage 1 – vision warmup (last 8 blocks only)
+  - name: exp10_15_mod251217_visio_warmup
+    batch_size: 4
+    grad_accum_steps: 4
+    lr: 0.00005
+    epochs: 3
+    lora_r: 8
+    lora_alpha: 16
+    lora_dropout: 0.1
+    lr_scheduler_type: "constant"
+    regex_targets:
+      - "visual\\.blocks\\.(2[3-9]|30)\\.attn\\.(qkv|proj)"
+
+  # Stage 2 – full vision encoder
+  - name: exp10_15_mod251217_full_visio
+    batch_size: 2
+    grad_accum_steps: 8
+    lr: 0.0001
+    epochs: 6
+    lora_r: 16
+    lora_alpha: 32
+    lora_dropout: 0.1
+    lr_scheduler_type: "constant"
+    regex_targets:
+      - "visual\\.blocks\\.\\d+\\.attn\\.(qkv|proj)"
+      - "visual\\.blocks\\.\\d+\\.mlp\\.(fc1|fc2)"
+      - "visual\\.merger\\.mlp\\.[02]"
+
+  # Stage 3 – joint training (vision + language)
+  - name: exp10_15_mod251217_joint
+    batch_size: 1
+    grad_accum_steps: 16
+    lr: 0.00001
+    epochs: 6
+    lora_r: 16
+    lora_alpha: 32
+    lora_dropout: 0.1
+    lr_scheduler_type: "linear"
+    regex_targets:
+      - "visual\\.blocks\\.\\d+\\.attn\\.(qkv|proj)"
+      - "visual\\.blocks\\.\\d+\\.mlp\\.(fc1|fc2)"
+      - "visual\\.merger\\.mlp\\.[02]"
+      - "self_attn\\.(q_proj|k_proj|v_proj|o_proj)"
+      - "mlp\\.(gate_proj|up_proj|down_proj)"
+
+
+
+                          
+
+                          
