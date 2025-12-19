@@ -32,33 +32,44 @@ logging_steps: 120
 load_best_model_at_end: true
 
 use_flash: true
+
 format_data: true
+
 collator:
   enabled: true
   numeric_only: false
 
+# debug controls
+debug:
+  dataset_subset: 30
+  wandb_suffix: "-debug"
+  wandb_tags: ["debug"]
+
+debug_eval: true
+debug_eval_limit: 3
+
 stages:
   # Stage 1 – vision warmup (last 8 blocks only)
-  # - name: exp10_15_mod251217_visio_warmup
-  #   batch_size: 4
-  #   grad_accum_steps: 4
-  #   lr: 0.00005
-  #   epochs: 3
-  #   lora_r: 8
-  #   lora_alpha: 16
-  #   lora_dropout: 0.1
-  #   lr_scheduler_type: "constant"
-  #   regex_targets:
-  #     - "visual\\.blocks\\.(2[3-9]|30)\\.attn\\.(qkv|proj)"
+  - name: exp12_mod251217_debug_visio_warmup
+    batch_size: 4
+    grad_accum_steps: 4
+    lr: 0.00005
+    epochs: 3
+    lora_r: 8
+    lora_alpha: 16
+    lora_dropout: 0.1
+    lr_scheduler_type: "constant"
+    regex_targets:
+      - "visual\\.blocks\\.(2[3-9]|30)\\.attn\\.(qkv|proj)"
 
   # Stage 2 – full vision encoder
-  - name: exp12_mod251217_full_visio
+  - name: exp12_mod251217_debug_full_visio
     batch_size: 2
     grad_accum_steps: 8
     lr: 0.0001
-    epochs: 6
-    lora_r: 16
-    lora_alpha: 32
+    epochs: 1
+    lora_r: 1
+    lora_alpha: 1
     lora_dropout: 0.1
     lr_scheduler_type: "constant"
     regex_targets:

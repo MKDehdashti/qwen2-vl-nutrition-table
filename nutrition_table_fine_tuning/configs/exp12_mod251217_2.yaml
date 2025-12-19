@@ -1,4 +1,4 @@
-experiment: exp12_mod251217 # exp10_15_joint_mod251217 with just stage 2
+experiment: exp12_mod251217_2 # exp10_15_joint_mod251217 with just stage 2 and exp12_mod251217 with mask_prompt_labels: true
 
 model_id: "Qwen/Qwen2-VL-7B-Instruct"
 task_prompt: "Detect the bounding boxes of all nutrition tables in the image."
@@ -11,7 +11,7 @@ max_pixels: 705600
 
 warmup_steps: 100
 pad_to_multiple_of: 8
-mask_prompt_labels: false
+mask_prompt_labels: true
 
 # eval_subset_size: none # set to small number for quick eval during training, full eval done after training
 enable_custom_metrics: false
@@ -52,7 +52,7 @@ stages:
   #     - "visual\\.blocks\\.(2[3-9]|30)\\.attn\\.(qkv|proj)"
 
   # Stage 2 – full vision encoder
-  - name: exp12_mod251217_full_visio
+  - name: exp12_mod251217_2_full_visio
     batch_size: 2
     grad_accum_steps: 8
     lr: 0.0001

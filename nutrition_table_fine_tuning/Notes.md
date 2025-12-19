@@ -46,7 +46,7 @@ tar -xzf venv_backup.tar.gz
  accelerate launch --mixed_precision=bf16 /workspace/projects/nutrition-table/src/train.py --config configs/exp1.yaml
   accelerate launch --mixed_precision=bf16 src/train.py --config configs/exp3.yaml
   accelerate launch --multi_gpu --mixed_precision=bf16 src/train.py --config configs/exp10_merge_test_repro.yaml
-    accelerate launch --multi_gpu --mixed_precision=bf16 src/train.py --config configs/exp13_debug.yaml
+    accelerate launch --multi_gpu --mixed_precision=bf16 src/train.py --config configs/exp12_mod251217.yaml
 
 
   accelerate launch --num_processes=1 --mixed_precision=bf16 src/train.py --config configs/ex7_2.yaml

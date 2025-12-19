@@ -58,7 +58,7 @@ def collate_fn(examples, processor, cfg=None, numeric_only=False):
             labels[labels == tid] = -100
 
     if numeric_only:
-        numeric_ids = [tid for tok_str, tid in tok.get_vocab().items() if re.fullmatch(r"[0-9]+", tok_str)]
+        numeric_ids = [tid for tok_str, tid in tok.get_vocab().items() if re.fullmatch(r"(?:▁|Ġ)?\d+", tok_str)]
         numeric_ids = torch.tensor(numeric_ids, device=labels.device)
         for i in range(labels.size(0)):
             row = labels[i]
@@ -67,5 +67,5 @@ def collate_fn(examples, processor, cfg=None, numeric_only=False):
             labels[i] = row
 
     batch["labels"] = labels
-    batch["pixel_values"] = batch["pixel_values"].to(torch.bfloat16)
+    # batch["pixel_values"] = batch["pixel_values"].to(torch.bfloat16)
     return batch
