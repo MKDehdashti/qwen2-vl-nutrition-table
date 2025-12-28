@@ -1,11 +1,11 @@
 # Commands
 source /workspace/projects/nutrition_table/nutrition_table_fine_tuning/.venv/bin/activate
-source /workspace/projects/nutrition_table_inference/env_infer/bin/activate
+source /workspace/projects/nutrition_table/nutrition_table_inference/env_infer/bin/activate
 
 vllm serve model/Qwen2-VL-7B/final_model --dtype bfloat16
 
 python -m vllm.entrypoints.openai.api_server \
-  --model /workspace/projects/nutrition-table3/model/Qwen2-VL-7B/quantized_gptqmodel \
+  --model /workspace/projects/nutrition_table/nutrition_table_inference/model/Qwen2-VL-7B/quantized_gptqmodel
   --dtype float16 \
   --quantization gptq \
   --host 0.0.0.0 \

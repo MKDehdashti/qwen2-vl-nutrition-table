@@ -54,9 +54,9 @@ stages:
     batch_size: 4
     grad_accum_steps: 4
     lr: 0.00005
-    epochs: 3
-    lora_r: 8
-    lora_alpha: 16
+    epochs: 1
+    lora_r: 1
+    lora_alpha: 1
     lora_dropout: 0.1
     lr_scheduler_type: "constant"
     regex_targets:

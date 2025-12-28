@@ -1,5 +1,5 @@
 # configs/exp13.yaml
-experiment: exp13
+experiment: exp13_mod121925 # exp10_15 with just stage 2
 
 model_id: "Qwen/Qwen2-VL-7B-Instruct"
 task_prompt: "Detect the bounding boxes of all nutrition tables in the image."
@@ -14,11 +14,12 @@ warmup_steps: 100
 pad_to_multiple_of: 8
 mask_prompt_labels: false
 
-eval_subset_size: 12
+# eval_subset_size: none # set to small number for quick eval during training, full eval done after training
+enable_custom_metrics: false
 
 inference:
   quantized: false
-  max_new_tokens: 64
+  # max_new_tokens: 64
   # CHANGED: remove max_seq_length so inference won't truncate either
   # max_seq_length: 2048
   task_prompt: "Detect the bounding boxes of all nutrition tables in the image."
@@ -38,9 +39,23 @@ collator:
   numeric_only: false
 
 stages:
-  - name: exp13_full_visio
+  # Stage 1 – vision warmup (last 8 blocks only)
+  # - name: exp10_visio_warmup_merge_test_repro_14
+  #   batch_size: 4
+  #   grad_accum_steps: 8
+  #   lr: 0.00005
+  #   epochs: 3
+  #   lora_r: 8
+  #   lora_alpha: 16
+  #   lora_dropout: 0.1
+  #   lr_scheduler_type: "constant"
+  #   regex_targets:
+  #     - "visual\\.blocks\\.(2[3-9]|30)\\.attn\\.(qkv|proj)"
+
+  # Stage 2 – full vision encoder
+  - name: exp13_mod121925_full_visio
     batch_size: 2
-    grad_accum_steps: 8
+    grad_accum_steps: 16
     lr: 0.0001
     epochs: 6
     lora_r: 16
@@ -51,3 +66,20 @@ stages:
       - "visual\\.blocks\\.\\d+\\.attn\\.(qkv|proj)"
       - "visual\\.blocks\\.\\d+\\.mlp\\.(fc1|fc2)"
       - "visual\\.merger\\.mlp\\.[02]"
+
+  # Stage 3 – joint training (vision + language)
+  - name: exp13_mod121925_joint
+    batch_size: 1
+    grad_accum_steps: 32
+    lr: 0.00001
+    epochs: 6
+    lora_r: 16
+    lora_alpha: 32
+    lora_dropout: 0.1
+    lr_scheduler_type: "linear"
+    regex_targets:
+      - "visual\\.blocks\\.\\d+\\.attn\\.(qkv|proj)"
+      - "visual\\.blocks\\.\\d+\\.mlp\\.(fc1|fc2)"
+      - "visual\\.merger\\.mlp\\.[02]"
+      - "self_attn\\.(q_proj|k_proj|v_proj|o_proj)"
+      - "mlp\\.(gate_proj|up_proj|down_proj)"

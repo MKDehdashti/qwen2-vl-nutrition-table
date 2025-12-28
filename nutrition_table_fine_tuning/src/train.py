@@ -30,9 +30,6 @@ is_main = state.is_main_process
 if not torch.cuda.is_available():
     raise SystemExit("CUDA not available. This training script is GPU-only.")
 
-if not is_main:
-    os.environ["WANDB_DISABLED"] = "true"
-
 
 def get_proj_root():
     return os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -145,13 +142,14 @@ if __name__ == "__main__":
 
         stage_base_src = cfg["model_id"] if stage_idx == 0 or prev_merged_dir is None else prev_merged_dir
 
-        if stage_idx == 0 or prev_merged_dir is None:
-            print(f"\n=== Stage: {name} (starting from base model: {cfg['model_id']}) ===")
-        else:
-            print(f"\n=== Stage: {name} (starting from previous merged stage: {prev_merged_dir}) ===")
-        print(f"    base_src   : {stage_base_src}")
-        print(f"    adapters   : {out_dir}")
-        print(f"    merged_out : {merged_dir}")
+        if is_main:
+            if stage_idx == 0 or prev_merged_dir is None:
+                print(f"\n=== Stage: {name} (starting from base model: {cfg['model_id']}) ===")
+            else:
+                print(f"\n=== Stage: {name} (starting from previous merged stage: {prev_merged_dir}) ===")
+            print(f"    base_src   : {stage_base_src}")
+            print(f"    adapters   : {out_dir}")
+            print(f"    merged_out : {merged_dir}")
 
         training_args = SFTConfig(
             output_dir=out_dir,
@@ -165,7 +163,7 @@ if __name__ == "__main__":
             bf16=use_bf16,
             fp16=use_fp16,
             tf32=True if has_cuda else False,
-            report_to="wandb",
+            report_to="wandb" if is_main else "none",
             logging_steps=cfg.get("logging_steps", 10),
             eval_strategy=cfg.get("eval_strategy", "steps"),
             eval_steps=stage.get("eval_steps", cfg.get("eval_steps", 50)),
@@ -206,6 +204,10 @@ if __name__ == "__main__":
         if is_main:
             init_wandb(run_id, training_args, peft_cfg, stage_name=name, exp_name=exp_name)
 
+        callbacks = [EarlyStoppingCallback(early_stopping_patience=3, early_stopping_threshold=0.001)]
+        if is_main:
+            callbacks.insert(0, WandBLossCallback())
+
         trainer = SFTTrainer(
             model=base_model,
             args=training_args,
@@ -213,7 +215,7 @@ if __name__ == "__main__":
             eval_dataset=test_ds,
             data_collator=lambda ex: collate_fn(ex, processor, cfg=cfg, numeric_only=numeric_only),
             peft_config=peft_cfg,
-            callbacks=[WandBLossCallback(), EarlyStoppingCallback(early_stopping_patience=3, early_stopping_threshold=0.001)],
+            callbacks=callbacks,
             compute_metrics=None,
             processing_class=processor,
         )
