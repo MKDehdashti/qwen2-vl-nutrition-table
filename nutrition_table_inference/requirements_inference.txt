@@ -3,7 +3,7 @@
 
 # Core PyTorch
 # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-# torch==2.8.0 (install before requirements)
+# torch==2.8.0 (install before requirements) python -m pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cu128
 
 # Core inference
 transformers==4.57.1
@@ -19,6 +19,7 @@ Pillow
 tqdm
 pyyaml
 
+hf_transfer
 datasets
 torchvision
 matplotlib

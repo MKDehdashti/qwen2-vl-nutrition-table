@@ -1,3 +1,4 @@
+# viz_utils_infer.py
 import os, torch, requests, argparse
 from io import BytesIO
 from PIL import Image

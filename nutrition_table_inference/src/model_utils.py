@@ -1,4 +1,4 @@
-# src_combo/model_utils
+# src/model_utils
 import os, json, re, torch
 from transformers import Qwen2VLForConditionalGeneration, Qwen2VLProcessor, BitsAndBytesConfig
 os.environ["PEFT_BACKEND"] = "HF"

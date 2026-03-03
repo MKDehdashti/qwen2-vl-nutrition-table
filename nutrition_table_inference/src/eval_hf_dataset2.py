@@ -1,4 +1,4 @@
-# eval_vllm_dataset.py
+# eval_hf_dataset.py
 import os
 import time
 import json
@@ -8,8 +8,9 @@ import numpy as np
 import torch
 from torchvision.ops import box_iou
 
+from transformers import Qwen2VLForConditionalGeneration, Qwen2VLProcessor
+
 from .dataset.data_utils import get_datasets, parse_boxes_from_text
-from .inference_vllm import call_vllm, image_to_data_url
 from .viz_utils_infer import draw_box_0to1000
 
 
@@ -24,21 +25,35 @@ def get_gpu_memory_gb():
         return None
 
 
-def eval_vllm_dataset(
-    server_url,
-    api_key,
+def eval_hf_dataset(
     model,
     split="val",
-    num_samples=50,
+    num_samples=123,
     max_new_tokens=256,
-    out_dir="outputs/vllm_eval",
+    out_dir="outputs/hf_eval",
     num_visuals=5,
+    prompt="Detect the bounding box of the nutrition table.",
+    use_fast=True,
 ):
     train, val = get_datasets(format_data_flag=True)
     ds = val if split == "val" else train
     n = min(num_samples, len(ds))
 
     os.makedirs(out_dir, exist_ok=True)
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    hf_model = Qwen2VLForConditionalGeneration.from_pretrained(
+        model,
+        torch_dtype=torch.bfloat16 if device == "cuda" else torch.float32,
+        device_map="auto" if device == "cuda" else None,
+    )
+    hf_model.eval()
+
+    processor = Qwen2VLProcessor.from_pretrained(
+        model,
+        use_fast=use_fast,
+    )
 
     ious, precisions, recalls, f1s, latencies = [], [], [], [], []
 
@@ -62,21 +77,50 @@ def eval_vllm_dataset(
         if image is None:
             continue
 
-        data_url = image_to_data_url(image)
+        messages = [
+            {"role": "system", "content": [{"type": "text", "text": "System message"}]},
+            {"role": "user", "content": [
+                {"type": "image", "image": image},
+                {"type": "text", "text": prompt},
+            ]},
+        ]
 
-        t0 = time.perf_counter()
-        text = call_vllm(
-            server_url=server_url,
-            api_key=api_key,
-            model=model,
-            prompt="Detect the bounding box of the nutrition table.",
-            img_data_url=data_url,
-            max_new_tokens=max_new_tokens,
+        text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+
+        inputs = processor(
+            text=[text],
+            images=[image],
+            return_tensors="pt",
+            padding=True,
         )
+
+        for k, v in inputs.items():
+            if torch.is_floating_point(v):
+                inputs[k] = v.to(device=device, dtype=hf_model.dtype)
+            else:
+                inputs[k] = v.to(device=device)
+
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        t0 = time.perf_counter()
+
+        with torch.no_grad():
+            out_ids = hf_model.generate(
+                **inputs,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,
+                temperature=0.0,
+            )
+
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
         dt_ms = (time.perf_counter() - t0) * 1000.0
         latencies.append(dt_ms)
 
-        pred_boxes = parse_boxes_from_text(text)
+        in_len = inputs["input_ids"].shape[1]
+        out_text = processor.batch_decode(out_ids[:, in_len:], skip_special_tokens=False)[0]
+
+        pred_boxes = parse_boxes_from_text(out_text)
 
         iou_mean, precision, recall, f1 = 0.0, 0.0, 0.0, 0.0
         if gt_boxes and pred_boxes:
@@ -105,7 +149,7 @@ def eval_vllm_dataset(
 
         if idx < num_visuals:
             sample_pred = {"image": image, "objects": {"bbox": pred_boxes}}
-            save_path = os.path.join(out_dir, f"vllm_{split}_{idx}.png")
+            save_path = os.path.join(out_dir, f"hf_{split}_{idx}.png")
             draw_box_0to1000(sample_pred, save_path=save_path)
             print("saved viz:", save_path)
 
@@ -129,28 +173,26 @@ def eval_vllm_dataset(
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--server_url", type=str, default="http://127.0.0.1:8000/v1")
-    parser.add_argument("--api_key", type=str, default="EMPTY")
     parser.add_argument("--model", type=str, required=True)
     parser.add_argument("--split", type=str, default="val", choices=["train", "val"])
-    parser.add_argument("--num_samples", type=int, default=50)
+    parser.add_argument("--num_samples", type=int, default=123)
     parser.add_argument("--max_new_tokens", type=int, default=256)
-    parser.add_argument("--out_dir", type=str, default="outputs/vllm_eval")
-    parser.add_argument("--num_visuals", type=int, default=5)
+    parser.add_argument("--out_dir", type=str, default="outputs/hf_eval")
+    parser.add_argument("--num_visuals", type=int, default=10)
     parser.add_argument("--name", type=str, default="config")
+    parser.add_argument("--use_fast", action="store_true")
     args = parser.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
 
-    stats = eval_vllm_dataset(
-        server_url=args.server_url,
-        api_key=args.api_key,
+    stats = eval_hf_dataset(
         model=args.model,
         split=args.split,
         num_samples=args.num_samples,
         max_new_tokens=args.max_new_tokens,
         out_dir=args.out_dir,
         num_visuals=args.num_visuals,
+        use_fast=args.use_fast,
     )
 
     print("Evaluation name:", args.name)
