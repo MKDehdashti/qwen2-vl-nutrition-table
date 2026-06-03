@@ -8,6 +8,7 @@ Eval set: **123 validation samples**.
 Metrics: Mean IoU, Precision@0.5, Recall@0.5, F1@0.5.
 W&B project: `nutrition-table-vl` (entity: `maryamdehdashti`).
 HuggingFace repo: `MayaKD/qwen2-vl-7b-nutrition`.
+GitHub repo: `MKDehdashti/qwen2-vl-nutrition-table` (public; renamed from `qwen_runpod`).
 
 ---
 
@@ -42,11 +43,15 @@ nutrition_table/
 │   ├── model/Qwen2-VL-7B/
 │   │   └── final_model_exp13/     # Active inference model (keep — all inference commands point here)
 │   ├── env_infer/                  # Inference Python environment (separate from fine-tuning)
+│   ├── .secrets                    # HF_TOKEN, WANDB_API_KEY (per-subproject, gitignored)
 │   └── cleanup.sh                 # Same cache-cleaning script
 │
-├── .secrets                        # HF_TOKEN, WANDB_API_KEY (not committed)
-└── CLAUDE.md                       # This file
+├── README.md                       # Public landing page
+├── project_report.md               # Concise technical report (interview-facing)
+└── CLAUDE.md                       # This file (full operational reference)
 ```
+
+> Docs split: `README.md` is the landing page, `project_report.md` is the concise writeup, `CLAUDE.md` (this file) holds the full command/config/gotcha reference. The old `Notes_*.md`, `results_summary.md`, `inference_summary.md`, and per-subfolder READMEs were consolidated into these three and removed.
 
 ---
 
