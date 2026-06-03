@@ -152,6 +152,43 @@ python src/eval_utils.py \
   --n 123
 ```
 
+### Training Results
+
+> **Note**: "1B" and "2B" in the experiment names below refer to **batch sizes** (1 or 2 per device), NOT model parameter counts. The model is always Qwen2-VL-7B (7 billion parameters).
+
+**Early experiments (exp1–exp11)** — pre-merge-bug-fix, rough numbers:
+
+| Experiment | Config | Final Mean IoU |
+|-----------|--------|:--------------:|
+| exp1 (vision blocks 20–23) | 4 blocks | 0.37 |
+| exp1 (8 blocks 16–23) | 8 blocks | 0.35 |
+| exp1 (all vision) | full vision | 0.34 |
+| exp9 | single-stage answer format | 0.35 |
+| exp10 | two-stage (language + 4 vision → + IoU loss) | 0.35 |
+| exp11 | two-stage (full vision → language + full vision) | Stage1: 0.29, Stage2: 0.33 |
+
+**Post-fix scaling study (repro series on same 7B base, different batch/GPU configs):**
+
+| Run | Batch/GPU | GPUs | Time | Stage 1 IoU | Stage 2 IoU | Stage 3 IoU |
+|-----|-----------|:----:|:----:|:-----------:|:-----------:|:-----------:|
+| repro_15 | bs=1 | 1× RTX Pro 6000 | 120 min | 0.63 | 0.839 | 0.845 |
+| repro_9  | bs=1 | 2× RTX Pro 6000 | 97 min  | 0.76 | 0.85  | 0.87  |
+| repro_11 | bs=2 | 1× RTX Pro 6000 | 150 min | 0.76 | 0.879 | 0.886 |
+| **repro_12** | **bs=1** | **2× RTX Pro 6000** | **89 min** | **0.75** | **0.852** | **0.893** |
+
+Best training result: **mean IoU 0.893** (repro_12, 3-stage, 2 GPUs, 89 min total).
+
+**Final model (exp13) accuracy on 123-sample val set:**
+
+| Metric | Value |
+|--------|:-----:|
+| Mean IoU | **0.82** |
+| Precision@0.5 | 0.90–0.92 |
+| Recall@0.5 | 0.88–0.90 |
+| F1@0.5 | 0.89–0.91 |
+
+The 0.82 vs 0.893 gap is because they are different experiments: repro_12 used a 3-stage schedule tuned over many iterations; exp13 is a cleaner 2-stage production run.
+
 ---
 
 ## Inference
@@ -255,44 +292,9 @@ Qwen2-VL has **no fixed max sequence length** — do not set `max_seq_length` or
 
 ---
 
-## Results
+## Inference Results
 
-### Training progression (verified from W&B run history)
-
-> **Note**: "1B" and "2B" in the experiment names below refer to **batch sizes** (1 or 2 per device), NOT model parameter counts. The model is always Qwen2-VL-7B (7 billion parameters).
-
-**Early experiments (exp1–exp11)** — pre-merge-bug-fix, rough numbers:
-
-| Experiment | Config | Final Mean IoU |
-|-----------|--------|:--------------:|
-| exp1 (vision blocks 20–23) | 4 blocks | 0.37 |
-| exp1 (8 blocks 16–23) | 8 blocks | 0.35 |
-| exp1 (all vision) | full vision | 0.34 |
-| exp9 | single-stage answer format | 0.35 |
-| exp10 | two-stage (language + 4 vision → + IoU loss) | 0.35 |
-| exp11 | two-stage (full vision → language + full vision) | Stage1: 0.29, Stage2: 0.33 |
-
-**Post-fix scaling study (repro series on same 7B base, different batch/GPU configs):**
-
-| Run | Batch/GPU | GPUs | Time | Stage 1 IoU | Stage 2 IoU | Stage 3 IoU |
-|-----|-----------|:----:|:----:|:-----------:|:-----------:|:-----------:|
-| repro_15 | bs=1 | 1× RTX Pro 6000 | 120 min | 0.63 | 0.839 | 0.845 |
-| repro_9  | bs=1 | 2× RTX Pro 6000 | 97 min  | 0.76 | 0.85  | 0.87  |
-| repro_11 | bs=2 | 1× RTX Pro 6000 | 150 min | 0.76 | 0.879 | 0.886 |
-| **repro_12** | **bs=1** | **2× RTX Pro 6000** | **89 min** | **0.75** | **0.852** | **0.893** |
-
-Best training result: **mean IoU 0.893** (repro_12, 3-stage, 2 GPUs, 89 min total).
-
-**Final model (exp13) — inference evaluation on 123-sample val set:**
-
-| Metric | Value |
-|--------|:-----:|
-| Mean IoU | **0.82** |
-| Precision@0.5 | 0.90–0.92 |
-| Recall@0.5 | 0.88–0.90 |
-| F1@0.5 | 0.89–0.91 |
-
-The 0.82 vs 0.893 gap is because they are different experiments: repro_12 used a 3-stage schedule tuned over many iterations; exp13 is a cleaner 2-stage production run.
+Accuracy is identical across backends (same exp13 weights, Mean IoU 0.82 — see Training Results above). These benchmarks measure speed and memory only.
 
 ### Inference benchmark (exp13 final model, 123 val samples, single GPU)
 

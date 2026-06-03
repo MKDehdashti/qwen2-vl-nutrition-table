@@ -4,9 +4,11 @@ Fine-tuned **Qwen2-VL-7B-Instruct** to detect nutrition tables in product images
 
 **Model on HuggingFace**: [`MayaKD/qwen2-vl-7b-nutrition`](https://huggingface.co/MayaKD/qwen2-vl-7b-nutrition)
 
+The project has two phases, in order: **(1) fine-tuning** the model, then **(2) inference** with the fine-tuned model. The sections below follow that order.
+
 ---
 
-## Approach
+# 1. Fine-Tuning
 
 ### Multi-Stage LoRA Fine-Tuning
 
@@ -19,6 +21,8 @@ The pipeline applies LoRA progressively across up to 3 stages. After each stage,
 | 3 — Joint | Vision (full) + LLM self-attn + MLP | End-to-end vision–language alignment |
 
 **exp13 (final model) uses 2 stages** — warmup was dropped after experiments showed no IoU gain when stage 2 already targets the full vision encoder.
+
+Base model `Qwen/Qwen2-VL-7B-Instruct`, trained with HuggingFace `SFTTrainer` + `accelerate`, BF16 + Flash Attention 2 + fused AdamW. Best checkpoint selected on `eval_loss` with early stopping (patience 3).
 
 ### Data Format
 
@@ -36,11 +40,22 @@ During exp10, LoRA merging on multi-GPU silently corrupted weights — merged-mo
 
 **Fix**: main-process-only save with `accelerator.is_main_process` guard + `wait_for_everyone()` barrier. After the fix, pre- and post-merge evaluations match within ~1%.
 
----
+### Running Training
 
-## Results
+```bash
+cd nutrition_table_fine_tuning
+source .venv/bin/activate
 
-### Training
+# Single GPU
+python src/train.py --config configs/exp13.yaml
+
+# Multi-GPU (2 GPUs)
+accelerate launch --multi_gpu --mixed_precision=bf16 src/train.py --config configs/exp13.yaml
+```
+
+### Fine-Tuning Results
+
+Training accuracy is reported as mean IoU on the 123-sample validation set.
 
 | Run | Stages | GPUs | Time | Final Mean IoU |
 |-----|:------:|:----:|:----:|:--------------:|
@@ -49,9 +64,31 @@ During exp10, LoRA merging on multi-GPU silently corrupted weights — merged-mo
 | **repro_12** | **3** | **2× RTX Pro 6000** | **89 min** (15+31+43) | **0.893** |
 | **exp13 (final)** | **2** | **2× RTX Pro 6000** | — | **0.82** |
 
-### Inference (exp13, 123 val samples, single GPU)
+The shipped model is **exp13**. Its full accuracy on the validation set:
 
-All backends produce equivalent accuracy (Mean IoU 0.82, F1 0.89–0.91). Performance differs by workload:
+| Metric | Value |
+|--------|:-----:|
+| Mean IoU | **0.82** |
+| Precision@0.5 | 0.91 |
+| Recall@0.5 | 0.89 |
+| F1@0.5 | 0.90 |
+
+The 0.82 vs 0.893 gap is because they are different experiments: repro_12 used a 3-stage schedule tuned over many iterations; exp13 is a cleaner 2-stage production run.
+
+---
+
+# 2. Inference
+
+Inference runs the **fine-tuned exp13 model**. Two backends are supported — HuggingFace `transformers` and vLLM. Accuracy is identical across backends (same weights, Mean IoU 0.82); they differ only in speed and memory.
+
+### Backends
+
+- **HuggingFace `transformers`** — best for offline evaluation and dataset processing. Use `batch_size=4`. 17–20 GB VRAM.
+- **vLLM** — best for production serving and multi-user throughput. Use `concurrency ≥ 4`. Pre-allocates ~72 GB for continuous batching (intentional, not a leak).
+
+vLLM must be served from a **local path** (it cannot load from an HF subfolder).
+
+### Inference Results (exp13, 123 val samples, single GPU)
 
 | Backend | Config | Mean Latency (ms) | P95 Latency (ms) | Throughput |
 |---------|--------|:-----------------:|:----------------:|:----------:|
@@ -60,12 +97,9 @@ All backends produce equivalent accuracy (Mean IoU 0.82, F1 0.89–0.91). Perfor
 | vLLM | concurrency=4 | 394 | 482 | **10 req/s** |
 | vLLM | concurrency=1 | 1,378 | 1,506 | 0.7 req/s |
 
-- **HF** is best for offline evaluation and dataset processing (batch_size=4, 17–20 GB VRAM)
-- **vLLM** is best for production serving — 10 req/s at concurrency=4, ~9× HF throughput (72 GB pre-allocated for continuous batching)
+vLLM at concurrency=4 delivers ~9× HF throughput, which is why it is the production choice despite the higher memory footprint.
 
----
-
-## Quantization
+### Quantization
 
 4-bit GPTQ via `GPTQModel` works for HF inference. vLLM serving is blocked: Qwen2-VL is a vision-language model and GPTQModel's tensor naming for VLMs doesn't match vLLM's GPTQ loader (`KeyError: layers.10.mlp.down_proj.g_idx`). Unresolved.
 
@@ -74,7 +108,7 @@ All backends produce equivalent accuracy (Mean IoU 0.82, F1 0.89–0.91). Perfor
 ## Code Structure
 
 ```
-nutrition_table_fine_tuning/src/
+nutrition_table_fine_tuning/src/        # Phase 1 — fine-tuning
   train.py              Multi-stage training loop (LoRA, merge, eval per stage)
   model_utils.py        Model loading, adapter merge, regex-based LoRA target selection
   eval_utils.py         IoU / Precision / Recall / F1; box parsing from generated text
@@ -82,7 +116,7 @@ nutrition_table_fine_tuning/src/
   dataset/collators.py  collate_fn: tokenization, label masking, numeric_only ablation mode
   configs/exp*.yaml     Per-experiment configs (13 experiments, exp1 → exp13)
 
-nutrition_table_inference/src/
+nutrition_table_inference/src/          # Phase 2 — inference
   inference_eval.py     Per-sample HF and vLLM latency + accuracy benchmark
   vllm_throughput.py    vLLM serving throughput under concurrent load
   eval_hf_dataset2.py   Batched HF evaluation over full dataset
