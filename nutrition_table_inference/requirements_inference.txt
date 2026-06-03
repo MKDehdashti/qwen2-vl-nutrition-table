@@ -7,19 +7,34 @@
 
 # Core inference
 transformers==4.57.1
-# auto-gptq==0.7.1
 vllm==0.11.0
 safetensors
 accelerate>=1.4.0
 sentencepiece
+peft
+qwen-vl-utils
+
+# HF Hub / data
+huggingface_hub
+hf_transfer
+datasets
+
+# Serving / HTTP (vLLM client + throughput benchmark)
+requests
+aiohttp
+
+# Logging
+wandb
 
 # Utilities
 numpy
 Pillow
 tqdm
 pyyaml
-
-hf_transfer
-datasets
 torchvision
 matplotlib
+
+# Quantization (optional — only for src/quantize_qwen2vl_gptq.py).
+# vLLM serving of the quantized model is unresolved; see CLAUDE.md.
+# gptqmodel
+# auto-gptq==0.7.1
