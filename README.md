@@ -41,3 +41,5 @@ Distributed under the **MIT License**. Fine-tunes **Qwen2-VL** (developed by Ali
 ## Author
 
 Maintained by [MKDehdashti](https://github.com/MKDehdashti). Contributions and feedback are welcome.
+
+Repository: [github.com/MKDehdashti/qwen2-vl-nutrition-table](https://github.com/MKDehdashti/qwen2-vl-nutrition-table)
