@@ -66,6 +66,11 @@ secrets/
 .secrets
 
 # -----------------------
+# Scratch notes (content captured in project_report.md and CLAUDE.md)
+Notes_ft.md
+Notes_inference.md
+
+# -----------------------
 # other projects or unrelated files
 debug-demo/
 speech/

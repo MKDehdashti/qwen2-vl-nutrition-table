@@ -1,0 +1,378 @@
+# Nutrition Table Detection — CLAUDE.md
+
+Fine-tuning and inference project for detecting nutrition table bounding boxes in food product images.
+Model: **Qwen2-VL-7B-Instruct** (always 7B, no other size variants).
+Task: given an image → predict normalized bounding box coordinates as text.
+Dataset: [`openfoodfacts/nutrition-table-detection`](https://huggingface.co/datasets/openfoodfacts/nutrition-table-detection) (HuggingFace public dataset).
+Eval set: **123 validation samples**.
+Metrics: Mean IoU, Precision@0.5, Recall@0.5, F1@0.5.
+W&B project: `nutrition-table-vl` (entity: `maryamdehdashti`).
+HuggingFace repo: `MayaKD/qwen2-vl-7b-nutrition`.
+
+---
+
+## Repository Layout
+
+```
+nutrition_table/
+├── nutrition_table_fine_tuning/    # Training code
+│   ├── src/
+│   │   ├── train.py               # Main training loop (multi-stage, merge, eval)
+│   │   ├── model_utils.py         # Model loading, adapter merge, processor setup
+│   │   ├── eval_utils.py          # IoU / Precision / Recall / F1 evaluation
+│   │   ├── wandb_utils.py         # W&B initialization and loss callback
+│   │   ├── viz_utils.py           # Bounding box visualization
+│   │   └── dataset/
+│   │       ├── data_utils.py      # format_data (coord conversion, box tags), parse_boxes_from_text
+│   │       └── collators.py       # collate_fn: tokenization, label masking, numeric_only mode
+│   ├── configs/exp*.yaml          # Per-experiment configs (stages, LoRA, lr, etc.)
+│   ├── runs/                      # Training outputs (adapters, merged models, wandb)
+│   ├── .venv/                     # Fine-tuning Python environment
+│   └── cleanup.sh                 # Clears HF/pip/torch caches, recreates workspace dirs
+│
+├── nutrition_table_inference/      # Inference and evaluation code
+│   ├── src/
+│   │   ├── inference_eval.py      # Per-sample HF and vLLM latency + accuracy benchmark
+│   │   ├── vllm_throughput.py     # vLLM serving throughput measurement
+│   │   ├── eval_hf_dataset2.py    # Batched HF evaluation over full dataset
+│   │   ├── eval_vllm_dataset.py   # vLLM evaluation over full dataset
+│   │   ├── quantize_qwen2vl_gptq.py  # 4-bit GPTQ quantization (partially working)
+│   │   ├── model_utils.py         # Inference-side model loading helpers
+│   │   └── viz_utils_infer.py     # Visualization for inference outputs
+│   ├── model/Qwen2-VL-7B/
+│   │   └── final_model_exp13/     # Active inference model (keep — all inference commands point here)
+│   ├── env_infer/                  # Inference Python environment (separate from fine-tuning)
+│   └── cleanup.sh                 # Same cache-cleaning script
+│
+├── .secrets                        # HF_TOKEN, WANDB_API_KEY (not committed)
+└── CLAUDE.md                       # This file
+```
+
+---
+
+## Environments
+
+**Two separate venvs** — do not cross-contaminate them.
+
+```bash
+# Fine-tuning
+source /workspace/projects/nutrition_table/nutrition_table_fine_tuning/.venv/bin/activate
+
+# Inference
+source /workspace/projects/nutrition_table/nutrition_table_inference/env_infer/bin/activate
+```
+
+To load secrets:
+```bash
+export $(grep -v '^#' /workspace/projects/nutrition_table/nutrition_table_inference/.secrets | xargs)
+```
+
+To recreate the inference env from scratch:
+```bash
+cd /workspace/projects/nutrition_table/nutrition_table_inference
+rm -rf env_infer
+python3 -m venv env_infer
+source env_infer/bin/activate
+python -m pip install --upgrade pip
+python -m pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cu128
+python -m pip install -r requirements_inference.txt
+```
+
+---
+
+## Training
+
+### Run training (from fine_tuning dir)
+
+```bash
+cd /workspace/projects/nutrition_table/nutrition_table_fine_tuning
+source .venv/bin/activate
+
+# Single GPU
+python src/train.py --config configs/exp13.yaml
+
+# Multi-GPU (2 GPUs)
+accelerate launch --multi_gpu --mixed_precision=bf16 src/train.py --config configs/exp13.yaml
+```
+
+Debug configs merge on top of `configs/exp1.yaml` (any config with "debug" in the name triggers this).
+
+### Architecture
+
+- **Base model**: `Qwen/Qwen2-VL-7B-Instruct`
+- **Method**: LoRA (PEFT) applied to frozen base; adapters merged into base between stages
+- **Trainer**: HuggingFace `SFTTrainer` + `accelerate`
+- **Precision**: BF16 + Flash Attention 2 + fused AdamW (`optim="adamw_torch_fused"`)
+- **Quantization during training**: optional 4-bit NF4 (BitsAndBytes) — off in exp13
+- **Best model selection**: `metric_for_best_model="eval_loss"`, `load_best_model_at_end=true`
+- **Early stopping**: patience=3, threshold=0.001
+
+### Multi-Stage Training Strategy
+
+The pipeline supports up to 3 stages. Each stage trains fresh LoRA adapters, then merges them into the base before the next stage starts (clean full-weight model each time, not adapter-on-adapter).
+
+| Stage (general) | Target Layers | Purpose |
+|-----------------|--------------|---------|
+| 1 — Vision warmup *(optional)* | Last 8 vision blocks (`attn.qkv`, `attn.proj`) | Light orientation of vision encoder |
+| 2 — Full vision | All vision `blocks.*.attn` + `blocks.*.mlp` + `merger.mlp` | Full visual feature learning |
+| 3 — Joint | Full vision targets + LLM `q/k/v/o_proj` + `gate/up/down_proj` | End-to-end vision-language alignment |
+
+**exp13 is a 2-stage experiment** — stage 1 (warmup) was dropped because experiments showed it added training time without measurable gain when stage 2 already targets the full vision encoder:
+
+| exp13 Stage | Name | Epochs | Batch | Grad Accum | LR | LoRA r/α |
+|-------------|------|:------:|:-----:|:----------:|:--:|:--------:|
+| 1 — Full vision | `exp13_mod121925_full_visio` | 6 | 2 | 16 | 1e-4 | 16/32 |
+| 2 — Joint | `exp13_mod121925_joint` | 6 | 1 | 32 | 1e-5 | 16/32 |
+
+Task prompt: `"Detect the bounding boxes of all nutrition tables in the image."`
+Image resolution: `min_pixels=784`, `max_pixels=705600`. `max_seq_length` is intentionally not set (truncation breaks image tokens).
+
+### Critical Bug: Multi-GPU Adapter Merging (Fixed)
+
+During `exp10`, adapter merging after multi-GPU training silently corrupted weights: merged-model IoU dropped from ~0.79 to ~0.30 while the in-memory (pre-merge) model scored correctly. Multiple `_merge_test_repro_*` variants isolated the root cause:
+
+- **Cause**: all processes simultaneously called `merge_and_unload()` + `save_pretrained()`, writing conflicting/partial weight shards
+- **Fix**: only `is_main_process` performs the merge and save; `wait_for_everyone()` sync barrier before and after
+- **Additional fix**: each stage loads from the previously merged directory as its base, not raw adapters
+
+After the fix, pre-merge and post-merge evaluations agree within ~1%.
+
+### Evaluation during training
+
+```bash
+python src/eval_utils.py \
+  --from_dir runs/<exp_name>/checkpoint-N \
+  --config configs/<exp>.yaml \
+  --tag strict_eval \
+  --n 123
+```
+
+---
+
+## Inference
+
+### Load secrets first
+
+```bash
+source /workspace/projects/nutrition_table/nutrition_table_inference/env_infer/bin/activate
+export $(grep -v '^#' /workspace/projects/nutrition_table/nutrition_table_inference/.secrets | xargs)
+```
+
+### HF inference (offline, batched)
+
+```bash
+cd /workspace/projects/nutrition_table/nutrition_table_inference
+
+# Unquantized
+python -m src.inference_eval \
+  --backend hf \
+  --model model/Qwen2-VL-7B/final_model_exp13 \
+  --run_name exp13_hf_bs4 \
+  --batch_size 4
+
+# 4-bit quantized (HF only — vLLM serving unresolved)
+python -m src.inference_eval \
+  --backend hf \
+  --model model/Qwen2-VL-7B/final_model_exp13_quantized_4bit \
+  --run_name exp13_hf_q_bs4 \
+  --batch_size 4
+```
+
+### vLLM serving
+
+```bash
+cd /workspace/projects/nutrition_table/nutrition_table_inference
+source env_infer/bin/activate
+
+# If 'python' resolves to the wrong interpreter, fix PATH first:
+export PATH="/workspace/projects/nutrition_table/nutrition_table_inference/env_infer/bin:$PATH"
+hash -r
+
+# Start server in a separate terminal (runs in foreground)
+# --host 0.0.0.0 is required for remote/RunPod access
+python -m vllm.entrypoints.openai.api_server \
+  --model /workspace/projects/nutrition_table/nutrition_table_inference/model/Qwen2-VL-7B/final_model_exp13 \
+  --dtype bfloat16 \
+  --host 0.0.0.0 \
+  --port 8000
+
+# Test the server is up
+curl http://127.0.0.1:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+        "model": "/workspace/projects/nutrition_table/nutrition_table_inference/model/Qwen2-VL-7B/final_model_exp13",
+        "messages": [{
+          "role": "user",
+          "content": [
+            {"type": "text", "text": "Detect the bounding boxes of all nutrition tables in the image."},
+            {"type": "image_url", "image_url": {"url": "https://static.openfoodfacts.org/images/products/27563564/2.jpg"}}
+          ]
+        }],
+        "max_tokens": 300,
+        "temperature": 0.0
+      }'
+
+# Per-sample latency + accuracy eval against running server
+python -m src.inference_eval \
+  --backend vllm \
+  --model /workspace/projects/nutrition_table/nutrition_table_inference/model/Qwen2-VL-7B/final_model_exp13 \
+  --run_name exp13_vllm_bs4 \
+  --batch_size 4 \
+  --server_url http://127.0.0.1:8000/v1
+
+# Serving throughput benchmark (concurrency=4 is the sweet spot per benchmarks)
+python -m src.vllm_throughput \
+  --model /workspace/projects/nutrition_table/nutrition_table_inference/model/Qwen2-VL-7B/final_model_exp13 \
+  --run_name vllm_c4 --concurrency 4
+
+# Full dataset eval via vLLM
+python -m src.eval_vllm_dataset \
+  --model /workspace/projects/nutrition_table/nutrition_table_inference/model/Qwen2-VL-7B/final_model_exp13 \
+  --num_samples 123 \
+  --name exp13_vllm
+```
+
+### Batched HF dataset eval
+
+```bash
+python -m src.eval_hf_dataset2 \
+  --from_dir model/Qwen2-VL-7B/final_model_exp13 \
+  --model_id Qwen/Qwen2-VL-7B-Instruct \
+  --split val --num_samples 123 \
+  --batch_size 4 --max_new_tokens 256 \
+  --name exp13_eval \
+  --out_dir outputs/hf_eval/exp13_eval
+```
+
+### Qwen2-VL sequence length notes
+
+Qwen2-VL has **no fixed max sequence length** — do not set `max_seq_length` or truncate (it breaks image tokens). vLLM controls this via `max_model_len` (ceiling) and `max_num_batched_tokens` (scheduling); chunking is transparent.
+
+---
+
+## Results
+
+### Training progression (verified from results_summary.md + W&B)
+
+> **Note**: "1B" and "2B" in the experiment names below refer to **batch sizes** (1 or 2 per device), NOT model parameter counts. The model is always Qwen2-VL-7B (7 billion parameters).
+
+**Early experiments (exp1–exp11)** — pre-merge-bug-fix, rough numbers:
+
+| Experiment | Config | Final Mean IoU |
+|-----------|--------|:--------------:|
+| exp1 (vision blocks 20–23) | 4 blocks | 0.37 |
+| exp1 (8 blocks 16–23) | 8 blocks | 0.35 |
+| exp1 (all vision) | full vision | 0.34 |
+| exp9 | single-stage answer format | 0.35 |
+| exp10 | two-stage (language + 4 vision → + IoU loss) | 0.35 |
+| exp11 | two-stage (full vision → language + full vision) | Stage1: 0.29, Stage2: 0.33 |
+
+**Post-fix scaling study (repro series on same 7B base, different batch/GPU configs):**
+
+| Run | Batch/GPU | GPUs | Time | Stage 1 IoU | Stage 2 IoU | Stage 3 IoU |
+|-----|-----------|:----:|:----:|:-----------:|:-----------:|:-----------:|
+| repro_15 | bs=1 | 1× RTX Pro 6000 | 120 min | 0.63 | 0.839 | 0.845 |
+| repro_9  | bs=1 | 2× RTX Pro 6000 | 97 min  | 0.76 | 0.85  | 0.87  |
+| repro_11 | bs=2 | 1× RTX Pro 6000 | 150 min | 0.76 | 0.879 | 0.886 |
+| **repro_12** | **bs=1** | **2× RTX Pro 6000** | **89 min** | **0.75** | **0.852** | **0.893** |
+
+Best training result: **mean IoU 0.893** (repro_12, 3-stage, 2 GPUs, 89 min total).
+
+**Final model (exp13) — inference evaluation on 123-sample val set:**
+
+| Metric | Value |
+|--------|:-----:|
+| Mean IoU | **0.82** |
+| Precision@0.5 | 0.90–0.92 |
+| Recall@0.5 | 0.88–0.90 |
+| F1@0.5 | 0.89–0.91 |
+
+The 0.82 vs 0.893 gap is because they are different experiments: repro_12 used a 3-stage schedule tuned over many iterations; exp13 is a cleaner 2-stage production run.
+
+### Inference benchmark (exp13 final model, 123 val samples, single GPU)
+
+**Offline / per-sample latency:**
+
+| Backend | Batch | Mean IoU | Mean Latency (ms) | P95 Latency (ms) | GPU Mem (GB) |
+|---------|:-----:|:--------:|:-----------------:|:----------------:|:------------:|
+| HF | 1 | 0.82 | 890 | 989 | 17.16 |
+| HF | 4 | 0.82 | **481** | **483** | 20.37 |
+| vLLM | 1 | 0.83 | 1,410 | 1,498 | 72.51 |
+| vLLM | 4 | 0.82 | 378 | 498 | 72.51 |
+
+**Serving throughput (vLLM's intended workload):**
+
+| Backend | Concurrency | Mean Latency (ms) | Requests/s | GPU Mem (GB) |
+|---------|:-----------:|:-----------------:|:----------:|:------------:|
+| HF (sequential) | bs=1 | 890 | 1.12 | 17.16 |
+| HF (batched) | bs=4 | 481 | ~2.08 | 20.37 |
+| vLLM | c=1 | 1,378 | 0.73 | 72.51 |
+| **vLLM** | **c=4** | **394** | **10.01** | **72.51** |
+
+vLLM's 72 GB memory usage is intentional pre-allocation for continuous batching, not a bug.
+
+**When to use which backend:**
+- **HF**: model evaluation, research, offline dataset processing (use batch_size=4)
+- **vLLM**: production API, multi-user serving, high throughput (use concurrency ≥ 4)
+
+---
+
+## Quantization
+
+4-bit GPTQ via `GPTQModel`:
+```bash
+python /workspace/projects/nutrition_table/nutrition_table_inference/src/quantize_qwen2vl_gptq.py
+```
+
+**Status**: quantized model at `model/Qwen2-VL-7B/final_model_exp13_quantized_4bit` works for **HF inference**. vLLM serving is **blocked**:
+- Error: `KeyError: 'layers.10.mlp.down_proj.g_idx'`
+- Root cause: Qwen2-VL is a vision-language model, not a standard `AutoModelForCausalLM`; GPTQModel's output tensor naming for VLMs does not match vLLM's GPTQ loader expectations
+- `AutoGPTQ` was also tried but failed at CUDA extension compilation (ninja build error)
+- **Unresolved** — vLLM + quantized Qwen2-VL serving needs upstream fix or different quant tool
+
+---
+
+## Cache / Disk Cleanup
+
+```bash
+# Normal (clears HF, pip, torch, wandb caches)
+bash /workspace/projects/nutrition_table/nutrition_table_inference/cleanup.sh
+
+# Check disk
+df -h / /workspace
+```
+
+---
+
+## HuggingFace Upload
+
+Repo `MayaKD/qwen2-vl-7b-nutrition` contains two folders mirroring the local run structure:
+- `exp13_mod121925_full_visio/` — exp13 stage 1 (full vision) adapter + checkpoint-102 + merged model ✅ uploaded
+- `exp13_mod121925_joint/` — exp13 stage 2 (joint) adapter + checkpoint-102 + merged model
+
+**Upload gotcha — cgroup memory limit**: this container has a ~3.8 GB cgroup memory limit. `upload_folder` OOMs because it tries to hash all files at once. Must upload file-by-file:
+
+```python
+api.upload_file(path_or_fileobj=local_path, path_in_repo=hf_path, repo_id=REPO_ID, ...)
+```
+
+Use `nohup` so the process survives session timeouts:
+```bash
+nohup bash -c 'source .venv/bin/activate && python3 upload_script.py' > upload.log 2>&1 &
+```
+
+**vLLM cannot load from HF subfolder**: vLLM doesn't support the `subfolder=` parameter. The model must be served from a local path. Do not delete `model/Qwen2-VL-7B/final_model_exp13/` — all inference commands depend on it. It is a flat copy of the joint stage (merged weights + adapter + tokenizer) kept locally for serving.
+
+---
+
+## Known Issues / Gotchas
+
+1. **Do not set `max_seq_length`** in configs — it truncates image tokens and breaks training/inference.
+2. **Multi-GPU merge guard**: `save_pretrained` in the merge step must be wrapped in `if accelerator.is_main_process` + `wait_for_everyone()`. Without this, merged weights are silently corrupted (IoU drops from ~0.79 to ~0.30).
+3. **1B/2B terminology in older notes**: these mean batch_size=1 or batch_size=2, not model size. Model is always 7B.
+4. **Two separate venvs**: `.venv` (fine-tuning) and `env_infer` (inference) — do not mix.
+5. **vLLM model path in old commands**: old notes reference `/workspace/projects/nutrition-table3/...` which is an incorrect/old path. Correct base path is `/workspace/projects/nutrition_table/nutrition_table_inference/model/Qwen2-VL-7B/`.
+6. **vLLM + 4-bit quantization**: unresolved as of last experiment (see Quantization section).
+7. **cgroup memory limit (~3.8 GB)**: despite large system RAM, this container is cgroup-limited. Any Python process that tries to hold multiple large files in memory (e.g. `upload_folder`, loading multiple model shards) will be OOM-killed. Upload files one at a time; be cautious with scripts that load large tensors outside of GPU memory.
+8. **cleanup.sh nukes the HF cache**: `~/.cache` and `/workspace/.cache` are deleted by cleanup.sh. If you ever load a model from HF Hub (not local disk), it will need to re-download after cleanup. Always use local paths for inference.
+9. **Do not delete `model/Qwen2-VL-7B/final_model_exp13/`**: this is the active inference model. vLLM cannot load from an HF subfolder, so there is no remote fallback — it must stay on disk.
