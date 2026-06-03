@@ -6,7 +6,7 @@ Task: given an image → predict normalized bounding box coordinates as text.
 Dataset: [`openfoodfacts/nutrition-table-detection`](https://huggingface.co/datasets/openfoodfacts/nutrition-table-detection) (HuggingFace public dataset).
 Eval set: **123 validation samples**.
 Metrics: Mean IoU, Precision@0.5, Recall@0.5, F1@0.5.
-W&B project: `nutrition-table-vl` (entity: `maryamdehdashti`).
+W&B project: `nutrition-table-vl`.
 HuggingFace repo: `MayaKD/qwen2-vl-7b-nutrition`.
 GitHub repo: `MKDehdashti/qwen2-vl-nutrition-table` (public; renamed from `qwen_runpod`).
 
@@ -257,7 +257,7 @@ Qwen2-VL has **no fixed max sequence length** — do not set `max_seq_length` or
 
 ## Results
 
-### Training progression (verified from results_summary.md + W&B)
+### Training progression (verified from W&B run history)
 
 > **Note**: "1B" and "2B" in the experiment names below refer to **batch sizes** (1 or 2 per device), NOT model parameter counts. The model is always Qwen2-VL-7B (7 billion parameters).
 
@@ -378,7 +378,7 @@ nohup bash -c 'source .venv/bin/activate && python3 upload_script.py' > upload.l
 2. **Multi-GPU merge guard**: `save_pretrained` in the merge step must be wrapped in `if accelerator.is_main_process` + `wait_for_everyone()`. Without this, merged weights are silently corrupted (IoU drops from ~0.79 to ~0.30).
 3. **1B/2B terminology in older notes**: these mean batch_size=1 or batch_size=2, not model size. Model is always 7B.
 4. **Two separate venvs**: `.venv` (fine-tuning) and `env_infer` (inference) — do not mix.
-5. **vLLM model path in old commands**: old notes reference `/workspace/projects/nutrition-table3/...` which is an incorrect/old path. Correct base path is `/workspace/projects/nutrition_table/nutrition_table_inference/model/Qwen2-VL-7B/`.
+5. **Canonical model path**: the inference model base path is `/workspace/projects/nutrition_table/nutrition_table_inference/model/Qwen2-VL-7B/`. Some older/stray commands may reference outdated paths — always use this one.
 6. **vLLM + 4-bit quantization**: unresolved as of last experiment (see Quantization section).
 7. **cgroup memory limit (~3.8 GB)**: despite large system RAM, this container is cgroup-limited. Any Python process that tries to hold multiple large files in memory (e.g. `upload_folder`, loading multiple model shards) will be OOM-killed. Upload files one at a time; be cautious with scripts that load large tensors outside of GPU memory.
 8. **cleanup.sh nukes the HF cache**: `~/.cache` and `/workspace/.cache` are deleted by cleanup.sh. If you ever load a model from HF Hub (not local disk), it will need to re-download after cleanup. Always use local paths for inference.
