@@ -346,9 +346,11 @@ df -h / /workspace
 
 ## HuggingFace Upload
 
-Repo `MayaKD/qwen2-vl-7b-nutrition` contains two folders mirroring the local run structure:
-- `exp13_mod121925_full_visio/` — exp13 stage 1 (full vision) adapter + checkpoint-102 + merged model ✅ uploaded
+Repo `MayaKD/qwen2-vl-7b-nutrition` contains two folders mirroring the local run structure (both fully uploaded, 28 files each):
+- `exp13_mod121925_full_visio/` — exp13 stage 1 (full vision) adapter + checkpoint-102 + merged model
 - `exp13_mod121925_joint/` — exp13 stage 2 (joint) adapter + checkpoint-102 + merged model
+
+The local `runs/.../merged/` and `checkpoint-102/` folders were deleted after upload to save disk (~17 GB). Only the small final adapters remain locally. To recover any merged weights or training state, pull from the HF repo. The active inference model at `model/Qwen2-VL-7B/final_model_exp13/` is a separate flat copy kept on disk (see below).
 
 **Upload gotcha — cgroup memory limit**: this container has a ~3.8 GB cgroup memory limit. `upload_folder` OOMs because it tries to hash all files at once. Must upload file-by-file:
 
