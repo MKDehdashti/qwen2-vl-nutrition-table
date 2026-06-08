@@ -374,6 +374,46 @@ nohup bash -c 'source .venv/bin/activate && python3 upload_script.py' > upload.l
 
 ---
 
+## HuggingFace Space (Triton + vLLM proxy)
+
+Space: `MayaKD/nutrition-table-detector-triton-vllm-proxy` (private by default).
+
+Architecture: **Gradio (7860) → Triton (8000) → vLLM (8008)**
+
+- `launch.sh` starts vLLM on port **8008**, then Triton, then Gradio.
+- Triton Python backend (`model_repository/vllm_model/1/model.py`) calls vLLM at `localhost:8008`.
+- Gradio (`app.py`) calls Triton at `localhost:8000`.
+
+**Two HF model repos — use the right one:**
+- `MayaKD/qwen2-vl-7b-nutrition` — training backup; weights are in subfolders (`exp13_.../merged/`). Cannot be loaded directly by vLLM.
+- `MayaKD/qwen2-vl-7b-nutrition-vllm` — flat copy of final merged weights at repo root. **This is the one vLLM serves.** `launch.sh` and `model.py` must both reference this name.
+
+**Prompt must match training exactly** — the model is sensitive to prompt deviations:
+```
+system: "You are a Vision Language Model specialized in interpreting visual data from product images.\nYour task is to analyze the provided product images and detect the nutrition tables in a certain format.\nFocus on delivering accurate, succinct answers based on the visual information. Avoid additional explanation unless absolutely necessary."
+user:   "Detect the bounding boxes of all nutrition tables in the image."
+```
+The system message must be defined at module level (no indentation on continuation lines) — indenting the string literal adds leading spaces to each line and changes the string the model sees.
+
+**GPU recommendation**: L4 (24 GB, $0.80/hr) — right-sized for this model. A100 (80 GB) allocates a massive KV cache and takes ~7 min to start. A10G small has only 15 GB system RAM, which is tight for two heavy processes.
+
+**vLLM cold-start on L4**: ~2–3 min. The wait loop in `launch.sh` must be long enough (≥300 s) or Triton/Gradio will start before vLLM is ready, causing `Connection refused` errors.
+
+---
+
+## Dataset Annotation Notes
+
+The `openfoodfacts/nutrition-table-detection` val set has 123 samples:
+- **117 samples have exactly 1 bounding box** (95%)
+- 5 samples have 2 boxes, 1 sample has 3 boxes
+- Some multi-box annotations are noise (e.g. a 2×1 pixel box alongside the real one)
+
+The dataset annotates only the **official EU-format nutrition declaration** (the standardized "Per 100g" table). Colorful summary panels, "Per portion" columns, and other non-standard nutrition displays are **not annotated** even when visually present. A product image showing two side-by-side nutrition columns (one colorful, one standard) will have only one ground-truth box. The model correctly learns this: it detects the EU-format table and ignores the rest.
+
+**Implication for demos**: crowded multi-product shelf images are out of distribution. Use single-product images (one label in frame) for reliable results.
+
+---
+
 ## Known Issues / Gotchas
 
 1. **Do not set `max_seq_length`** in configs — it truncates image tokens and breaks training/inference.
@@ -385,3 +425,4 @@ nohup bash -c 'source .venv/bin/activate && python3 upload_script.py' > upload.l
 7. **cgroup memory limit (~3.8 GB)**: despite large system RAM, this container is cgroup-limited. Any Python process that tries to hold multiple large files in memory (e.g. `upload_folder`, loading multiple model shards) will be OOM-killed. Upload files one at a time; be cautious with scripts that load large tensors outside of GPU memory.
 8. **cleanup.sh nukes the HF cache**: `~/.cache` and `/workspace/.cache` are deleted by cleanup.sh. If you ever load a model from HF Hub (not local disk), it will need to re-download after cleanup. Always use local paths for inference.
 9. **Do not delete `model/Qwen2-VL-7B/final_model_exp13/`**: this is the active inference model. vLLM cannot load from an HF subfolder, so there is no remote fallback — it must stay on disk.
+10. **HF Space model name must match vLLM**: `launch.sh` serves `MayaKD/qwen2-vl-7b-nutrition-vllm`; `model.py` must send requests with exactly that string as the `model` field — any mismatch returns 404.
