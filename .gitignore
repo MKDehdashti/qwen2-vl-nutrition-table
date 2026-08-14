@@ -81,6 +81,11 @@ nutrition_table_inference/AutoGPTQ/
 **/env*/
 **/wandb/
 **/outputs/
+# ...but keep the eval/benchmark result JSONs — they are the raw numbers behind the
+# results tables in CLAUDE.md, are only ~10 KB total, and exist nowhere else.
+# The .png bbox visualizations stay ignored (regenerable, mostly duplicates).
+!nutrition_table_inference/outputs/
+nutrition_table_inference/outputs/**/*.png
 **/model/
 **/models/
 **/*.safetensors

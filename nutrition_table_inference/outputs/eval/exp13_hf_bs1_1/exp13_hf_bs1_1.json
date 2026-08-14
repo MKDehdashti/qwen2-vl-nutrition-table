@@ -1,0 +1,27 @@
+{
+  "run_name": "exp13_hf_bs1_1",
+  "backend": "hf",
+  "model": "/workspace/projects/nutrition_table/nutrition_table_inference/model/Qwen2-VL-7B/final_model_exp13",
+  "split": "val",
+  "prompt": "Detect the bounding boxes of all nutrition tables in the image.",
+  "system_text": "System message",
+  "stats": {
+    "samples": 123.0,
+    "batch_size": 1.0,
+    "mean_iou": 0.82,
+    "precision@0.5": 0.91,
+    "recall@0.5": 0.89,
+    "f1@0.5": 0.9,
+    "latency_ms_per_sample_mean_end_to_end": 890.32,
+    "latency_ms_per_sample_p95_end_to_end": 989.31,
+    "latency_ms_per_sample_mean_without_preprocess": 774.59,
+    "latency_ms_per_sample_p95_without_preprocess": 832.96,
+    "gpu_memory_gb": 17.16,
+    "note_without_preprocess": "For HF this is model.generate() time only (excludes processor + decode)."
+  },
+  "artifacts": {
+    "run_dir": "outputs/eval/exp13_hf_bs1_1",
+    "viz_dir": "outputs/eval/exp13_hf_bs1_1/viz",
+    "json_path": "outputs/eval/exp13_hf_bs1_1/exp13_hf_bs1_1.json"
+  }
+}

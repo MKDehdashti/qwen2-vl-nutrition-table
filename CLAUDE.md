@@ -27,7 +27,7 @@ nutrition_table/
 │   │       ├── data_utils.py      # format_data (coord conversion, box tags), parse_boxes_from_text
 │   │       └── collators.py       # collate_fn: tokenization, label masking, numeric_only mode
 │   ├── configs/exp*.yaml          # Per-experiment configs (stages, LoRA, lr, etc.)
-│   ├── runs/                      # Training outputs (adapters, merged models, wandb)
+│   ├── (runs/)                    # GONE from disk — training outputs live only on HF now
 │   ├── .venv/                     # Fine-tuning Python environment
 │   └── cleanup.sh                 # Clears HF/pip/torch caches, recreates workspace dirs
 │
@@ -212,7 +212,8 @@ python -m src.inference_eval \
   --run_name exp13_hf_bs4 \
   --batch_size 4
 
-# 4-bit quantized (HF only — vLLM serving unresolved)
+# 4-bit quantized — NOTE: this model no longer exists on disk (see Quantization).
+# Re-run quantize_qwen2vl_gptq.py first or this command will fail.
 python -m src.inference_eval \
   --backend hf \
   --model model/Qwen2-VL-7B/final_model_exp13_quantized_4bit \
@@ -331,7 +332,9 @@ vLLM's 72 GB memory usage is intentional pre-allocation for continuous batching,
 python /workspace/projects/nutrition_table/nutrition_table_inference/src/quantize_qwen2vl_gptq.py
 ```
 
-**Status**: quantized model at `model/Qwen2-VL-7B/final_model_exp13_quantized_4bit` works for **HF inference**. vLLM serving is **blocked**:
+**Status — artifact lost**: `model/Qwen2-VL-7B/final_model_exp13_quantized_4bit` was **deleted from disk and was never uploaded to HF** (verified 2026-08-14). It is gone; re-running the script above is the only way to get it back. Kept below is what was learned from it.
+
+It worked for **HF inference**. vLLM serving was **blocked**:
 - Error: `KeyError: 'layers.10.mlp.down_proj.g_idx'`
 - Root cause: Qwen2-VL is a vision-language model, not a standard `AutoModelForCausalLM`; GPTQModel's output tensor naming for VLMs does not match vLLM's GPTQ loader expectations
 - `AutoGPTQ` was also tried but failed at CUDA extension compilation (ninja build error)
@@ -357,7 +360,9 @@ Repo `MayaKD/qwen2-vl-7b-nutrition` contains two folders mirroring the local run
 - `exp13_mod121925_full_visio/` — exp13 stage 1 (full vision) adapter + checkpoint-102 + merged model
 - `exp13_mod121925_joint/` — exp13 stage 2 (joint) adapter + checkpoint-102 + merged model
 
-The local `runs/.../merged/` and `checkpoint-102/` folders were deleted after upload to save disk (~17 GB). Only the small final adapters remain locally. To recover any merged weights or training state, pull from the HF repo. The active inference model at `model/Qwen2-VL-7B/final_model_exp13/` is a separate flat copy kept on disk (see below).
+**The entire local `nutrition_table_fine_tuning/runs/` tree is gone** (verified 2026-08-14) — not just the `merged/` and `checkpoint-102/` subfolders, but the final adapters too. HF is now the *only* copy of all training output. To retrain, resume, or recover any adapter, merged weights, or optimizer/scheduler/RNG state, pull from `MayaKD/qwen2-vl-7b-nutrition` — both stages are complete there (57 files, 34 GB, including `training_args.bin`, `rng_state_{0,1}.pth`, `scheduler.pt`, `optimizer.pt`).
+
+The active inference model at `model/Qwen2-VL-7B/final_model_exp13/` is a separate flat copy kept on disk (see below).
 
 **Upload gotcha — cgroup memory limit**: this container has a ~3.8 GB cgroup memory limit. `upload_folder` OOMs because it tries to hash all files at once. Must upload file-by-file:
 
@@ -424,5 +429,5 @@ The dataset annotates only the **official EU-format nutrition declaration** (the
 6. **vLLM + 4-bit quantization**: unresolved as of last experiment (see Quantization section).
 7. **cgroup memory limit (~3.8 GB)**: despite large system RAM, this container is cgroup-limited. Any Python process that tries to hold multiple large files in memory (e.g. `upload_folder`, loading multiple model shards) will be OOM-killed. Upload files one at a time; be cautious with scripts that load large tensors outside of GPU memory.
 8. **cleanup.sh nukes the HF cache**: `~/.cache` and `/workspace/.cache` are deleted by cleanup.sh. If you ever load a model from HF Hub (not local disk), it will need to re-download after cleanup. Always use local paths for inference.
-9. **Do not delete `model/Qwen2-VL-7B/final_model_exp13/`**: this is the active inference model. vLLM cannot load from an HF subfolder, so there is no remote fallback — it must stay on disk.
+9. **`model/Qwen2-VL-7B/final_model_exp13/` is the active inference model** — keep it while this box is in use, but it *does* have a remote fallback: `MayaKD/qwen2-vl-7b-nutrition-vllm` is a flat repo (weights at root, no subfolder) that vLLM can serve directly, and its shards are byte-for-byte the same size as the local ones. Losing the local copy costs a re-download, not the model. (The local dir additionally carries `adapter_model.safetensors`, `optimizer.pt`, `trainer_state.json` and friends — those are backed up under `exp13_mod121925_joint/checkpoint-102/` in `MayaKD/qwen2-vl-7b-nutrition`.)
 10. **HF Space model name must match vLLM**: `launch.sh` serves `MayaKD/qwen2-vl-7b-nutrition-vllm`; `model.py` must send requests with exactly that string as the `model` field — any mismatch returns 404.

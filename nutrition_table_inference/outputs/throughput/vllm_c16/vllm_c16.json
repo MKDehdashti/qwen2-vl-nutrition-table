@@ -1,0 +1,23 @@
+{
+  "run_name": "vllm_c16",
+  "model": "/workspace/projects/nutrition_table/nutrition_table_inference/model/Qwen2-VL-7B/final_model_exp13",
+  "server_url": "http://127.0.0.1:8000/v1",
+  "split": "val",
+  "prompt": "Detect the bounding boxes of all nutrition tables in the image.",
+  "system_text": "System message",
+  "stats": {
+    "backend": "vllm_openai_api",
+    "samples": 123.0,
+    "concurrency": 16.0,
+    "max_new_tokens": 256.0,
+    "latency_ms_p50_end_to_end": 15927.93,
+    "latency_ms_p95_end_to_end": 22652.71,
+    "latency_ms_mean_end_to_end": 16527.85,
+    "throughput_requests_per_s": 0.94,
+    "throughput_completion_tokens_per_s": 23.68,
+    "throughput_total_tokens_per_s": 837.69,
+    "completion_tokens_total": 3107.0,
+    "total_tokens_total": 109927.0,
+    "wall_time_s": 131.23
+  }
+}

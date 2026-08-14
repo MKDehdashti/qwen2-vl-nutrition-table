@@ -1,0 +1,15 @@
+{
+  "name": "exp13_unquantized",
+  "model": "/workspace/projects/nutrition_table/nutrition_table_inference/model/Qwen2-VL-7B/final_model_exp13",
+  "split": "val",
+  "stats": {
+    "samples": 123,
+    "mean_iou": 0.81,
+    "precision@0.5": 0.94,
+    "recall@0.5": 0.91,
+    "f1@0.5": 0.92,
+    "latency_ms_mean": 510.93,
+    "latency_ms_p95": 640.54,
+    "gpu_memory_gb": 72.51
+  }
+}
