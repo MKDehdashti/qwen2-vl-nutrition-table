@@ -15,10 +15,11 @@ entirely as a sequence-generation task.
 | | | |
 |:---:|:---:|:---:|
 | ![Cluttered shelf](docs/examples/example-shelf-cluttered.png) | ![Angled bottle](docs/examples/example-bottle-angled.png) | ![Close-up can](docs/examples/example-can-closeup.png) |
-| Cluttered shelf, small target | Angled label, glare | Tight crop, wide table |
+| Cluttered shelf, small target | Curved bottle, dense adjacent text | Tight crop, wide table |
 
-*Model predictions on held-out validation images. Red box is the model's output; no ground
-truth is drawn.*
+*Model predictions on held-out validation images. The red box is the model's output; no ground
+truth is drawn. Note the middle and right examples: the box stops at the Nutrition Facts panel
+and excludes the ingredients block immediately below it, despite near-identical typography.*
 
 ---
 
@@ -28,25 +29,30 @@ Shipped model **exp13**, evaluated on all 123 validation samples:
 
 | Metric | Value | |
 |--------|:-----:|---|
-| Mean IoU | **0.82** | measured |
-| Precision@0.5 | 0.91 | upper bound — see below |
-| Recall@0.5 | 0.89 | upper bound — see below |
-| F1@0.5 | 0.90 | upper bound — see below |
+| **Mean IoU** | **0.82** | primary metric |
+| Precision@0.5 | ≤ 0.91 | upper bound — see below |
+| Recall@0.5 | ≤ 0.89 | upper bound — see below |
+| F1@0.5 | ≤ 0.90 | upper bound — see below |
 
 Accuracy is identical across serving backends — same weights, so HF `transformers` and vLLM
 agree to within measurement noise.
 
-> **The threshold metrics are being re-measured.** The original implementation counted every
-> cell of the IoU matrix above 0.5 rather than performing one-to-one matching, so N
-> overlapping predictions against one ground-truth box scored N true positives — which could
-> push recall above 1.0. The bias is strictly upward, so the corrected figures will be equal
-> or lower; the published numbers are upper bounds until a GPU re-run lands.
+> **Why the threshold metrics are reported as bounds.** They were computed with a matching
+> rule that counted every IoU-matrix cell above 0.5, rather than pairing each ground-truth box
+> with at most one prediction. When the model emits two overlapping boxes for a single table,
+> that scores two true positives instead of one — inflating precision and recall, and in the
+> limit allowing recall above 1.0.
 >
-> **Mean IoU is unaffected.** It is threshold-free and never used the matching path, so 0.82
-> stands as measured.
+> The corrected implementation in [`metrics.py`](nutrition_table_fine_tuning/src/metrics.py)
+> does greedy one-to-one matching and ships with a regression test on the exact failure case.
+> The bias it removes is strictly upward, so true values sit **at or below** those shown.
+> 95% of validation images contain exactly one ground-truth box, so divergence requires
+> duplicate detections on the same table — the effect is structurally bounded but not
+> quantified here, because only aggregate statistics were persisted and recomputing means
+> re-running inference on a GPU.
 >
-> The fix is in [`metrics.py`](nutrition_table_fine_tuning/src/metrics.py) with a regression
-> test covering the exact failure case. Finding this is what motivated the test suite.
+> **Mean IoU is unaffected and is the number to judge this model on.** It is threshold-free
+> and never touched the matching path.
 
 ### Serving performance (single GPU, 123 val samples)
 
@@ -139,13 +145,16 @@ Multiple boxes concatenate; images with no table produce `"No table found."`
 | repro_12 | 3 | 2× RTX Pro 6000 | 89 min | 0.893 |
 | **exp13 (shipped)** | **2** | **2× RTX Pro 6000** | — | **0.82** |
 
-The three-stage schedule reached **0.893**, showing there is roughly 7 IoU points of headroom
-above the shipped model. exp13 is the two-stage production run and the artifact that is
-published and reproducible; the `repro_*` weights were exploratory and were not preserved.
-Closing that gap is the top item under Future Work.
+The three-stage schedule reached **0.893**, so roughly 7 IoU points of headroom exist above the
+shipped model. exp13 is the two-stage production run and the artifact that is published and
+reproducible; the `repro_*` weights were exploratory and were not preserved.
 
-Vision warmup (stage 1) was dropped from the production schedule after it showed no IoU gain
-once stage 2 already targets the full vision encoder.
+**This table is not a controlled ablation.** exp13 differs from the `repro_*` runs in batch
+size and learning-rate schedule as well as stage count, so the 0.82 → 0.893 gap cannot be
+attributed to the extra stage alone. What it does establish is that ~0.89 is reachable on this
+dataset. Vision warmup was dropped from the production schedule on the basis of separate
+comparisons where it cost training time without a matching IoU gain — an effect this table
+does not isolate.
 
 ---
 

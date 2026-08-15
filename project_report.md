@@ -20,7 +20,7 @@ The pipeline applies LoRA progressively across up to 3 stages. After each stage,
 | 2 — Full vision | All vision blocks + merger MLP | Full visual feature learning |
 | 3 — Joint | Vision (full) + LLM self-attn + MLP | End-to-end vision–language alignment |
 
-**exp13 (final model) uses 2 stages** — warmup was dropped after experiments showed no IoU gain when stage 2 already targets the full vision encoder.
+**exp13 (final model) uses 2 stages** — warmup was dropped after separate comparisons showed it cost training time without a matching IoU gain once stage 2 already targets the full vision encoder. Note that the run table below is not a controlled ablation: exp13 differs from the `repro_*` runs in batch size and schedule as well as stage count.
 
 Base model `Qwen/Qwen2-VL-7B-Instruct`, trained with HuggingFace `SFTTrainer` + `accelerate`, BF16 + Flash Attention 2 + fused AdamW. Best checkpoint selected on `eval_loss` with early stopping (patience 3).
 
@@ -66,19 +66,20 @@ Training accuracy is reported as mean IoU on the 123-sample validation set.
 
 The shipped model is **exp13**. Its full accuracy on the validation set:
 
-| Metric | Value | Status |
-|--------|:-----:|--------|
-| Mean IoU | **0.82** | measured |
-| Precision@0.5 | 0.91 | upper bound, pending re-measurement |
-| Recall@0.5 | 0.89 | upper bound, pending re-measurement |
-| F1@0.5 | 0.90 | upper bound, pending re-measurement |
+| Metric | Value | |
+|--------|:-----:|--|
+| **Mean IoU** | **0.82** | primary metric |
+| Precision@0.5 | ≤ 0.91 | upper bound |
+| Recall@0.5 | ≤ 0.89 | upper bound |
+| F1@0.5 | ≤ 0.90 | upper bound |
 
 > **Metric correction.** The original precision/recall implementation counted every IoU-matrix
 > cell above 0.5 instead of matching one-to-one, so N overlapping predictions against a single
 > ground-truth box scored N true positives and recall could exceed 1.0. `metrics.py` now does
-> greedy one-to-one matching, with a regression test on the exact failure case. The old bias
-> was strictly upward, so corrected figures will be equal or lower. Mean IoU never used the
-> matching path and is unaffected.
+> greedy one-to-one matching, with a regression test on the exact failure case. The removed
+> bias was strictly upward, so true values sit at or below those shown. Only aggregate
+> statistics were persisted, so quantifying the gap would mean re-running inference on a GPU.
+> Mean IoU never used the matching path, is unaffected, and is the metric to judge the model on.
 
 The three-stage schedule reached **0.893**, so there is roughly 7 IoU points of headroom above the shipped model. exp13 is the two-stage production run: it is the artifact that is published, reproducible, and benchmarked throughout this report. The `repro_*` runs were exploratory and their weights were not preserved. Productionizing the three-stage schedule is the top open item.
 

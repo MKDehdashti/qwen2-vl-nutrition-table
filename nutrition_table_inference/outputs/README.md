@@ -68,8 +68,11 @@ are retained only as a record.
 
 **Threshold metrics are upper bounds.** `precision@0.5`, `recall@0.5` and `f1@0.5` in these
 files were computed by counting every IoU-matrix cell above threshold rather than matching
-one-to-one, which overcounts true positives when predictions overlap. `metrics.py` now does
-greedy matching. Re-measurement needs a GPU. `mean_iou` never used that path and is unaffected.
+one-to-one, which overcounts true positives when a table draws duplicate detections.
+`metrics.py` now does greedy matching, so anything measured from here on is correct; the
+numbers already in these files were not recomputed, because only aggregates were persisted and
+redoing them means re-running inference on a GPU. The removed bias was strictly upward, so
+true values sit at or below what is recorded. `mean_iou` never used that path and is exact.
 
 **System prompt.** Every run recorded `"system_text": "System message"` — a placeholder, not
 the training system message. That default is preserved so these numbers stay reproducible;
