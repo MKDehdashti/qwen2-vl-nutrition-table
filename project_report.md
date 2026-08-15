@@ -66,12 +66,19 @@ Training accuracy is reported as mean IoU on the 123-sample validation set.
 
 The shipped model is **exp13**. Its full accuracy on the validation set:
 
-| Metric | Value |
-|--------|:-----:|
-| Mean IoU | **0.82** |
-| Precision@0.5 | 0.91 |
-| Recall@0.5 | 0.89 |
-| F1@0.5 | 0.90 |
+| Metric | Value | Status |
+|--------|:-----:|--------|
+| Mean IoU | **0.82** | measured |
+| Precision@0.5 | 0.91 | upper bound, pending re-measurement |
+| Recall@0.5 | 0.89 | upper bound, pending re-measurement |
+| F1@0.5 | 0.90 | upper bound, pending re-measurement |
+
+> **Metric correction.** The original precision/recall implementation counted every IoU-matrix
+> cell above 0.5 instead of matching one-to-one, so N overlapping predictions against a single
+> ground-truth box scored N true positives and recall could exceed 1.0. `metrics.py` now does
+> greedy one-to-one matching, with a regression test on the exact failure case. The old bias
+> was strictly upward, so corrected figures will be equal or lower. Mean IoU never used the
+> matching path and is unaffected.
 
 The three-stage schedule reached **0.893**, so there is roughly 7 IoU points of headroom above the shipped model. exp13 is the two-stage production run: it is the artifact that is published, reproducible, and benchmarked throughout this report. The `repro_*` runs were exploratory and their weights were not preserved. Productionizing the three-stage schedule is the top open item.
 

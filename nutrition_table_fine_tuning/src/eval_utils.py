@@ -1,8 +1,28 @@
 # eval_utils.py
-import os, torch, matplotlib.pyplot as plt
-from torchvision.ops import box_iou
+"""Evaluate a checkpoint on the validation split.
+
+Importable as `evaluate_model(...)` from train.py, and runnable directly:
+
+    python src/eval_utils.py \
+      --from_dir runs/<exp_name>/checkpoint-N \
+      --config configs/<exp>.yaml \
+      --tag strict_eval \
+      --n 123
+
+Metric definitions live in metrics.py.
+"""
+
+import argparse
+import json
+import os
+
+import torch
+import yaml
+
+from metrics import detection_metrics
 from viz_utils import run_inference_strict
 from dataset.data_utils import parse_boxes_from_text
+
 
 def evaluate_model(
     model,
@@ -12,16 +32,15 @@ def evaluate_model(
     strict=True,
     tag=None,
     cfg=None,
-    training_args=None,
-    plot=True,
 ):
+    """Mean IoU / precision@0.5 / recall@0.5 / F1@0.5 over the first `n` samples."""
     if not isinstance(cfg, dict) or "task_prompt" not in cfg:
         raise ValueError("cfg must include task_prompt")
 
-    model.eval()
-
     if dataset is None:
         raise ValueError("Dataset must be provided to avoid redundant loading.")
+
+    model.eval()
 
     ds = dataset.select(range(min(n, len(dataset)))) if hasattr(dataset, "select") else dataset[:n]
 
@@ -55,25 +74,7 @@ def evaluate_model(
             continue
 
         pred_boxes = metrics.get("objects", {}).get("bbox", [])
-        iou_mean, precision, recall, f1 = 0.0, 0.0, 0.0, 0.0
-
-        if gt_boxes and pred_boxes:
-            gt_t = torch.tensor(gt_boxes, dtype=torch.float32)
-            pr_t = torch.tensor(pred_boxes, dtype=torch.float32)
-            if gt_t.ndim == 1:
-                gt_t = gt_t.unsqueeze(0)
-            if pr_t.ndim == 1:
-                pr_t = pr_t.unsqueeze(0)
-
-            ious_mat = box_iou(gt_t, pr_t)
-            best_gt = ious_mat.max(dim=1)[0]
-            best_pr = ious_mat.max(dim=0)[0]
-            iou_mean = (best_gt.mean() + best_pr.mean()).item() / 2
-
-            matched = (ious_mat > 0.5).sum().item()
-            precision = matched / len(pr_t)
-            recall = matched / len(gt_t)
-            f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+        iou_mean, precision, recall, f1 = detection_metrics(gt_boxes, pred_boxes)
 
         metrics["iou"] = iou_mean
         metrics["precision"] = precision
@@ -95,18 +96,69 @@ def evaluate_model(
         out["recall@0.5"] = sum(recalls) / len(recalls)
     if f1s:
         out["f1@0.5"] = sum(f1s) / len(f1s)
-
-    if plot and results and training_args:
-        precisions_curve = [m.get("precision", 0.0) for m in results]
-        recalls_curve = [m.get("recall", 0.0) for m in results]
-        plt.figure()
-        plt.plot(recalls_curve, precisions_curve, marker="o")
-        plt.xlabel("Recall")
-        plt.ylabel("Precision")
-        plt.title(f"PR Curve ({tag})")
-        pr_path = os.path.join(training_args.output_dir, f"precision_recall_curve_{tag}.png")
-        plt.savefig(pr_path, bbox_inches="tight")
-        plt.close()
-        out["pr_curve_path"] = pr_path
+    out["samples"] = len(ious)
+    if tag:
+        out["tag"] = tag
 
     return out
+
+
+def _load_config(path):
+    proj_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    full_path = path if os.path.isabs(path) else os.path.join(proj_root, path)
+    if not os.path.exists(full_path):
+        raise FileNotFoundError(f"Config file not found: {full_path}")
+    with open(full_path) as f:
+        return yaml.safe_load(f)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--from_dir", required=True,
+                        help="Checkpoint or merged-model directory to evaluate")
+    parser.add_argument("--config", required=True,
+                        help="Experiment YAML, e.g. configs/exp13.yaml")
+    parser.add_argument("--tag", default="eval", help="Label recorded in the output")
+    parser.add_argument("--n", type=int, default=123, help="Number of val samples")
+    parser.add_argument("--model_id", default=None,
+                        help="Base model id; defaults to model_id from the config")
+    parser.add_argument("--use_adapters", action="store_true",
+                        help="Treat --from_dir as LoRA adapters over the base model")
+    parser.add_argument("--quantized", action="store_true", help="Load in 4-bit")
+    parser.add_argument("--out", default=None, help="Optional path to write JSON results")
+    args = parser.parse_args()
+
+    # Imported here so that `--help` works on a machine without a GPU.
+    from dataset.data_utils import get_datasets
+    from model_utils import load_model
+
+    cfg = _load_config(args.config)
+    model_id = args.model_id or cfg["model_id"]
+
+    _, val = get_datasets(cfg)
+
+    model, processor = load_model(
+        model_id=model_id,
+        dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
+        quantized=args.quantized,
+        use_adapters=args.use_adapters,
+        from_dir=args.from_dir,
+        cfg=cfg,
+    )
+
+    results = evaluate_model(
+        model, processor, n=args.n, dataset=val, strict=True, tag=args.tag, cfg=cfg,
+    )
+    results["from_dir"] = args.from_dir
+    results["config"] = args.config
+
+    print(json.dumps(results, indent=2))
+    if args.out:
+        os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+        with open(args.out, "w") as f:
+            json.dump(results, f, indent=2)
+        print(f"wrote {args.out}")
+
+
+if __name__ == "__main__":
+    main()

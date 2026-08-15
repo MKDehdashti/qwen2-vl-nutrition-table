@@ -11,9 +11,10 @@ import numpy as np
 import aiohttp
 
 from .dataset.data_utils import get_datasets
+from .prompts import PLACEHOLDER_SYSTEM_TEXT, TASK_PROMPT
 
 
-PROMPT = "Detect the bounding boxes of all nutrition tables in the image."
+PROMPT = TASK_PROMPT
 
 
 def image_to_data_url(img, fmt="JPEG"):
@@ -122,7 +123,7 @@ def main():
 
     p.add_argument("--run_root", type=str, default="outputs/throughput")
     p.add_argument("--run_name", type=str, required=True)
-    p.add_argument("--system_text", type=str, default="System message")
+    p.add_argument("--system_text", type=str, default=PLACEHOLDER_SYSTEM_TEXT)
     args = p.parse_args()
 
     train, val = get_datasets(format_data_flag=True)

@@ -6,7 +6,8 @@ from io import BytesIO
 import requests
 from PIL import Image
 
-from .dataset.data_utils import parse_boxes_from_text, system_message
+from .dataset.data_utils import parse_boxes_from_text
+from .prompts import SYSTEM_MESSAGE, TASK_PROMPT
 from .viz_utils_infer import draw_box_0to1000
 
 
@@ -34,60 +35,23 @@ def image_to_data_url(img, fmt="JPEG"):
 # --------------------------
 # Call vLLM Server
 # --------------------------
-def call_vllm(server_url, api_key, model, prompt, img_data_url, max_new_tokens):
-    # payload = {
-    #     "model": model,
-    #     "messages": [
-    #         {
-    #             "role": "user",
-    #             "content": [
-    #                 {
-    #                     "type": "image_url",
-    #                     "image_url": {
-    #                         "url": img_data_url
-    #                     },
-    #                 },
-    #                 {
-    #                     "type": "text",
-    #                     "text": prompt,
-    #                 },
-    #             ],
-    #         }
-    #     ],
-    #     "max_tokens": max_new_tokens,
-    #     "temperature": 0.0,
-    # }
+def call_vllm(server_url, api_key, model, prompt, img_data_url, max_new_tokens,
+              system_text=SYSTEM_MESSAGE):
+    """POST one image to the vLLM OpenAI-compatible endpoint.
+
+    Previously this function accepted `prompt` and then ignored it, sending a
+    hardcoded strict-format instruction instead. That is what produced the
+    outputs/vllm_eval/*_strict_format.json results.
+    """
     payload = {
         "model": model,
         "messages": [
-            {
-                "role": "system",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": system_message,
-                    }
-                ],
-            },
+            {"role": "system", "content": [{"type": "text", "text": system_text}]},
             {
                 "role": "user",
                 "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": img_data_url
-                        },
-                    },
-                    {
-                        "type": "text",
-                        "text": (
-                            "Detect the bounding box of the nutrition table. "
-                            "Respond only with coordinates in this format: "
-                            "(x_min, y_min),(x_max, y_max). "
-                            "If there are multiple tables, output multiple boxes "
-                            "separated by spaces."
-                        ),
-                    },
+                    {"type": "image_url", "image_url": {"url": img_data_url}},
+                    {"type": "text", "text": prompt},
                 ],
             },
         ],
@@ -171,7 +135,7 @@ def main():
         default="/workspace/projects/nutrition-table3/model/Qwen2-VL-7B/quantized_gptqmodel",
     )
     parser.add_argument("--image_url", type=str, required=True)
-    parser.add_argument("--prompt", type=str, default="Detect the bounding box of the nutrition table.")
+    parser.add_argument("--prompt", type=str, default=TASK_PROMPT)
     parser.add_argument("--output_path", type=str, default="outputs/vllm_viz.png")
     parser.add_argument("--max_new_tokens", type=int, default=256)
     args = parser.parse_args()

@@ -152,6 +152,25 @@ python src/eval_utils.py \
   --n 123
 ```
 
+This command previously did not work — `eval_utils.py` had no `argparse` and no `__main__`.
+It now has both, plus `--model_id`, `--use_adapters`, `--quantized` and `--out`.
+
+### Tests
+
+```bash
+pip install pytest && python -m pytest     # from the repo root
+```
+
+`src/metrics.py` and `src/prompts.py` are dependency-free (no torch) so the correctness suite
+runs anywhere in seconds; tests needing torch skip themselves. Both files are duplicated into
+each subproject and tests assert the copies stay byte-identical — **edit one, copy it over the
+other**.
+
+**CI is written but not yet active**: the workflow sits at `ci/ci.yml` rather than
+`.github/workflows/`, because the push token lacked GitHub's `workflow` scope. `ci/README.md`
+has the two-command activation. It runs pytest on 3.10/3.12 plus a ruff smoke lint; both pass
+locally.
+
 ### Training Results
 
 > **Note**: "1B" and "2B" in the experiment names below refer to **batch sizes** (1 or 2 per device), NOT model parameter counts. The model is always Qwen2-VL-7B (7 billion parameters).
@@ -332,9 +351,10 @@ vLLM's 72 GB memory usage is intentional pre-allocation for continuous batching,
 
 ## Quantization
 
-4-bit GPTQ via `GPTQModel`:
+4-bit GPTQ via `GPTQModel` (now a package-relative module, run with `-m` like the others):
 ```bash
-python /workspace/projects/nutrition_table/nutrition_table_inference/src/quantize_qwen2vl_gptq.py
+cd /workspace/projects/nutrition_table/nutrition_table_inference
+python -m src.quantize_qwen2vl_gptq
 ```
 
 **Status**: the local copy at `model/Qwen2-VL-7B/final_model_exp13_quantized_4bit` is gone from disk, but the weights are **safe on HF** at `MayaKD/qwen2-vl-7b-gptq-nutrition` (private, 6.94 GB, 2 shards + `quantize_config.json` + `quant_log.csv`). Re-download from there rather than re-running the quantization.
@@ -436,3 +456,6 @@ The dataset annotates only the **official EU-format nutrition declaration** (the
 8. **cleanup.sh nukes the HF cache**: `~/.cache` and `/workspace/.cache` are deleted by cleanup.sh. If you ever load a model from HF Hub (not local disk), it will need to re-download after cleanup. Always use local paths for inference.
 9. **`model/Qwen2-VL-7B/final_model_exp13/` is the active inference model** — keep it while this box is in use, but it *does* have a remote fallback: `MayaKD/qwen2-vl-7b-nutrition-vllm` is a flat repo (weights at root, no subfolder) that vLLM can serve directly, and its shards are byte-for-byte the same size as the local ones. Losing the local copy costs a re-download, not the model. (The local dir additionally carries `adapter_model.safetensors`, `optimizer.pt`, `trainer_state.json` and friends — those are backed up under `exp13_mod121925_joint/checkpoint-102/` in `MayaKD/qwen2-vl-7b-nutrition`.)
 10. **HF Space model name must match vLLM**: `launch.sh` serves `MayaKD/qwen2-vl-7b-nutrition-vllm`; `model.py` must send requests with exactly that string as the `model` field — any mismatch returns 404.
+11. **Published precision/recall/F1 are upper bounds**: they were computed by counting every IoU-matrix cell above 0.5 instead of matching one-to-one, so overlapping predictions overcounted true positives (recall could exceed 1.0). Fixed in `metrics.py` with greedy matching + a regression test. **The committed numbers have not been re-measured — that needs a GPU.** Mean IoU is unaffected (threshold-free, never used the matching path).
+12. **All prompts come from `prompts.py`**: never hardcode a prompt string. The repo previously held three divergent variants — the training prompt, a singular-phrasing variant defaulted into several eval scripts, and a strict-format instruction hardcoded inside `call_vllm()` that silently overrode its own `prompt` argument. The last one produced the 0.573 result in `outputs/vllm_eval/`.
+13. **Benchmarks used a placeholder system prompt**: every committed JSON records `"system_text": "System message"`, not the real training system message. That default is retained so the numbers stay reproducible; pass `--system_text` to test the trained configuration. The HF Space uses the real system message, so Space output and benchmark numbers are not strictly comparable.

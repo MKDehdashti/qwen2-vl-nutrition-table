@@ -50,12 +50,27 @@ Throughput peaks at c=8 and collapses at c=16 as the scheduler saturates.
 
 ### About the 0.573 result
 
-That file records a **deliberate prompt-format ablation**, not a failure of the shipped
-model. It applied a stricter output-format instruction on top of the system message, and
-accuracy fell from ~0.82 to 0.573 on a 50-sample subset.
+Originally read as a deliberate prompt ablation. Tracing it through the code showed
+something less flattering: `call_vllm()` in `inference_vllm.py` accepted a `prompt` argument
+and **ignored it**, sending a hardcoded strict-format instruction plus the real training
+system message instead. Every `vllm_eval/` result went through that path, whatever prompt
+the caller passed.
 
-The finding is that this model is unusually sensitive to deviations in the prompt it was
-fine-tuned with — changing the instruction wording degrades detection sharply even though
-the weights are unchanged. That is why the exact training prompt is reproduced verbatim in
-the README, the model cards, and the HF Space, and why it is treated as part of the model's
-interface rather than a tunable knob. It is kept here as evidence for that claim.
+So the 0.573 is real, but it measured an accidental configuration rather than a designed
+experiment, and it is confounded — output format and system message both differed from the
+other runs at once. It is not evidence about prompt sensitivity in either direction.
+
+`call_vllm()` now honours its `prompt` argument, and all prompt strings come from
+`prompts.py`. The `vllm_eval/` numbers therefore describe code that no longer exists and
+are retained only as a record.
+
+## Two caveats that apply to every file here
+
+**Threshold metrics are upper bounds.** `precision@0.5`, `recall@0.5` and `f1@0.5` in these
+files were computed by counting every IoU-matrix cell above threshold rather than matching
+one-to-one, which overcounts true positives when predictions overlap. `metrics.py` now does
+greedy matching. Re-measurement needs a GPU. `mean_iou` never used that path and is unaffected.
+
+**System prompt.** Every run recorded `"system_text": "System message"` — a placeholder, not
+the training system message. That default is preserved so these numbers stay reproducible;
+pass `--system_text` to evaluate the configuration the model was trained with.

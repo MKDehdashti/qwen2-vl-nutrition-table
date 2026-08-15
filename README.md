@@ -25,15 +25,27 @@ truth is drawn.*
 
 Shipped model **exp13**, evaluated on all 123 validation samples:
 
-| Metric | Value |
-|--------|:-----:|
-| Mean IoU | **0.82** |
-| Precision@0.5 | **0.91** |
-| Recall@0.5 | **0.89** |
-| F1@0.5 | **0.90** |
+| Metric | Value | |
+|--------|:-----:|---|
+| Mean IoU | **0.82** | measured |
+| Precision@0.5 | 0.91 | upper bound — see below |
+| Recall@0.5 | 0.89 | upper bound — see below |
+| F1@0.5 | 0.90 | upper bound — see below |
 
 Accuracy is identical across serving backends — same weights, so HF `transformers` and vLLM
 agree to within measurement noise.
+
+> **The threshold metrics are being re-measured.** The original implementation counted every
+> cell of the IoU matrix above 0.5 rather than performing one-to-one matching, so N
+> overlapping predictions against one ground-truth box scored N true positives — which could
+> push recall above 1.0. The bias is strictly upward, so the corrected figures will be equal
+> or lower; the published numbers are upper bounds until a GPU re-run lands.
+>
+> **Mean IoU is unaffected.** It is threshold-free and never used the matching path, so 0.82
+> stands as measured.
+>
+> The fix is in [`metrics.py`](nutrition_table_fine_tuning/src/metrics.py) with a regression
+> test covering the exact failure case. Finding this is what motivated the test suite.
 
 ### Serving performance (single GPU, 123 val samples)
 
@@ -178,10 +190,18 @@ trimmed = [o[len(i):] for i, o in zip(inputs.input_ids, out_ids)]
 print(processor.batch_decode(trimmed, skip_special_tokens=False)[0])
 ```
 
-> **The prompt is part of the interface.** This model is unusually sensitive to instruction
-> wording — an ablation with a stricter output-format instruction dropped mean IoU from 0.82
-> to **0.573** with unchanged weights. Use the system message and prompt exactly as written
-> above.
+> **Use the training prompt.** Inference should send the same strings the model was fine-tuned
+> on; both are defined in [`prompts.py`](nutrition_table_fine_tuning/src/prompts.py) as the
+> single source of truth. The repository had accumulated three divergent configurations — the
+> training prompt, a singular-phrasing variant defaulted into several eval scripts, and a
+> hardcoded strict-format instruction inside the vLLM client that silently overrode the
+> `prompt` argument passed to it. All three are now unified.
+>
+> One open question: every committed benchmark sent the placeholder string `"System message"`
+> as the system prompt rather than the real training system message. Whether that costs
+> accuracy has not been measured cleanly, because the one run that used the real system
+> message also changed the output format at the same time. `--system_text` makes the
+> comparison a one-flag experiment.
 
 ### vLLM serving
 
@@ -241,7 +261,9 @@ nutrition_table/
 │   ├── src/
 │   │   ├── train.py                    # Multi-stage loop (LoRA, merge, eval)
 │   │   ├── model_utils.py              # Loading, adapter merge, LoRA target selection
-│   │   ├── eval_utils.py               # IoU / Precision / Recall / F1
+│   │   ├── eval_utils.py               # Evaluation entrypoint (importable + CLI)
+│   │   ├── metrics.py                  # IoU / precision / recall / F1 (dependency-free)
+│   │   ├── prompts.py                  # Canonical system message + task prompt
 │   │   └── dataset/                    # Coord conversion, box tags, collators
 │   └── configs/exp*.yaml               # 13 experiment configs
 │
@@ -251,11 +273,26 @@ nutrition_table/
 │   │   ├── vllm_throughput.py          # Concurrency benchmark (async)
 │   │   ├── eval_hf_dataset2.py         # Full-dataset HF evaluation
 │   │   ├── eval_vllm_dataset.py        # Full-dataset vLLM evaluation
+│   │   ├── metrics.py / prompts.py     # Copies of the shared modules above
 │   │   └── quantize_qwen2vl_gptq.py    # 4-bit GPTQ quantization
 │   └── outputs/                        # Committed benchmark JSONs + notes
 │
+├── tests/                              # Metric, prompt and parsing tests
 └── docs/examples/                      # Prediction visualizations
 ```
+
+`metrics.py` and `prompts.py` are duplicated into both subprojects because they deploy
+independently with separate virtualenvs; tests assert the copies stay byte-identical.
+
+## Tests
+
+```bash
+pip install pytest && python -m pytest
+```
+
+39 tests, no GPU and no heavy dependencies required — `metrics.py` and `prompts.py` are
+deliberately dependency-free, and tests needing torch skip themselves. CI runs them on
+Python 3.10 and 3.12.
 
 ---
 
@@ -275,6 +312,8 @@ real one.
 
 ## Future work
 
+- Re-measure precision/recall/F1 with the corrected one-to-one matching (needs a GPU)
+- A/B the placeholder system prompt against the real training system message
 - Close the 0.82 → 0.893 gap by productionizing the three-stage schedule
 - Add IoU-aware and Dice loss terms rather than pure token cross-entropy
 - Balanced sampling for small and rare targets

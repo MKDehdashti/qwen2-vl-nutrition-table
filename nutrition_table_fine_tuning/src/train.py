@@ -8,7 +8,7 @@ from datasets import load_dataset
 from transformers import EarlyStoppingCallback
 import wandb
 
-from dataset.data_utils import get_datasets, format_data
+from dataset.data_utils import get_datasets, format_data, set_seed
 from dataset.collators import collate_fn
 from eval_utils import evaluate_model
 from wandb_utils import init_wandb, WandBLossCallback
@@ -23,6 +23,10 @@ from model_utils import (
 
 os.environ["HF_DATASETS_OFFLINE"] = "0"
 os.environ["HF_DATASETS_DISABLE_CACHING"] = "0"
+
+# Seeding used to happen as a side effect of importing data_utils; it is now
+# explicit so that importing a helper does not mutate global RNG state.
+set_seed(0)
 
 state = PartialState()
 is_main = state.is_main_process
@@ -232,8 +236,6 @@ if __name__ == "__main__":
                 strict=True,
                 tag=f"{name}_pre_merge",
                 cfg=cfg,
-                training_args=training_args,
-                plot=False,
             )
             if wandb.run is not None:
                 wandb.log({f"pre_merge/{k}": v for k, v in pre_merge_metrics.items()}, step=trainer.state.global_step)
@@ -257,8 +259,6 @@ if __name__ == "__main__":
                 strict=True,
                 tag=f"{name}_merged_inmem",
                 cfg=cfg,
-                training_args=training_args,
-                plot=False,
             )
 
             del merged_inmem
@@ -273,8 +273,6 @@ if __name__ == "__main__":
                 strict=True,
                 tag=f"{name}_merged_reload",
                 cfg=cfg,
-                training_args=training_args,
-                plot=False,
             )
 
             if wandb.run is not None:

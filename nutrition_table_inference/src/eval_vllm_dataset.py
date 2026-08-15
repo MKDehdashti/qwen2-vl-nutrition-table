@@ -5,11 +5,11 @@ import json
 import argparse
 import subprocess
 import numpy as np
-import torch
-from torchvision.ops import box_iou
 
 from .dataset.data_utils import get_datasets, parse_boxes_from_text
 from .inference_vllm import call_vllm, image_to_data_url
+from .metrics import detection_metrics
+from .prompts import SYSTEM_MESSAGE, TASK_PROMPT
 from .viz_utils_infer import draw_box_0to1000
 
 
@@ -69,7 +69,7 @@ def eval_vllm_dataset(
             server_url=server_url,
             api_key=api_key,
             model=model,
-            prompt="Detect the bounding box of the nutrition table.",
+            prompt=TASK_PROMPT,
             img_data_url=data_url,
             max_new_tokens=max_new_tokens,
         )
@@ -78,25 +78,7 @@ def eval_vllm_dataset(
 
         pred_boxes = parse_boxes_from_text(text)
 
-        iou_mean, precision, recall, f1 = 0.0, 0.0, 0.0, 0.0
-        if gt_boxes and pred_boxes:
-            gt_t = torch.tensor(gt_boxes, dtype=torch.float32)
-            pr_t = torch.tensor(pred_boxes, dtype=torch.float32)
-            if gt_t.ndim == 1:
-                gt_t = gt_t.unsqueeze(0)
-            if pr_t.ndim == 1:
-                pr_t = pr_t.unsqueeze(0)
-
-            ious_mat = box_iou(gt_t, pr_t)
-            best_gt = ious_mat.max(dim=1)[0]
-            best_pr = ious_mat.max(dim=0)[0]
-            iou_mean = (best_gt.mean() + best_pr.mean()).item() / 2
-
-            matched = (ious_mat > 0.5).sum().item()
-            precision = matched / len(pr_t)
-            recall = matched / len(gt_t)
-            if precision + recall > 0:
-                f1 = 2 * precision * recall / (precision + recall)
+        iou_mean, precision, recall, f1 = detection_metrics(gt_boxes, pred_boxes)
 
         ious.append(iou_mean)
         precisions.append(precision)

@@ -1,26 +1,47 @@
 # dataset/data_utils.py
-import os, torch, random, numpy as np, re
+"""Dataset loading and message formatting (inference side).
+
+Seeding is exposed as `set_seed()` rather than executed at import time: importing
+a data helper should not mutate global RNG or cuDNN state.
+
+Prompt strings come from prompts.py so that inference cannot silently drift from
+the strings the model was trained on -- which is exactly what happened before,
+when this module hardcoded a singular-phrasing variant of the task prompt.
+"""
+
+import random
+import re
+
+import numpy as np
+import torch
 from datasets import load_dataset
 
-# reproducibility
-torch.manual_seed(0); torch.cuda.manual_seed_all(0)
-np.random.seed(0); random.seed(0)
-torch.backends.cudnn.deterministic = True
-torch.backends.cudnn.benchmark = False
+from ..prompts import SYSTEM_MESSAGE, TASK_PROMPT
 
 dataset_id = "openfoodfacts/nutrition-table-detection"
 
-# -------------------------
-#   SYSTEM PROMPT
-# -------------------------
-system_message = """You are a Vision Language Model specialized in interpreting visual data from product images.
-Your task is to analyze the provided product images and detect the nutrition tables in a certain format.
-Focus on delivering accurate, succinct answers based on the visual information. Avoid additional explanation unless absolutely necessary."""
+# Backwards-compatible alias; prompts.py is the single source of truth.
+system_message = SYSTEM_MESSAGE
 
-# -------------------------
-#   FORMAT DATA
-# -------------------------
-def format_data(sample, label="nutrition-table"):
+
+def set_seed(seed: int = 0, deterministic: bool = True):
+    """Seed every RNG this project touches. Call once from the entrypoint."""
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.backends.cudnn.deterministic = deterministic
+    torch.backends.cudnn.benchmark = not deterministic
+
+
+def format_data(sample, cfg=None, label="nutrition-table"):
+    """Convert one dataset row into chat messages with box tokens.
+
+    Dataset boxes are `(y_min, x_min, y_max, x_max)` normalized to [0, 1]; the
+    model is trained on `(x_min, y_min, x_max, y_max)` scaled to [0, 1000].
+    """
+    prompt = (cfg or {}).get("task_prompt", TASK_PROMPT)
+
     objects = sample.get("objects", {})
     bboxes = objects.get("bbox", [])
     annotations = []
@@ -38,39 +59,52 @@ def format_data(sample, label="nutrition-table"):
 
     assistant_text = " ".join(annotations) if annotations else "No table found."
     messages = [
-        {"role": "system", "content": system_message},
+        {"role": "system", "content": SYSTEM_MESSAGE},
         {
             "role": "user",
             "content": [
                 {"type": "image", "image": sample["image"]},
-                {"type": "text", "text": "Detect the bounding box of the nutrition table."},
+                {"type": "text", "text": prompt},
             ],
         },
         {"role": "assistant", "content": assistant_text},
     ]
-
     return {"messages": messages}
 
-# -------------------------
-#   PARSE BOXES
-# -------------------------
+
 def parse_boxes_from_text(text: str):
-    matches = re.findall(r"\((\d+),\s*(\d+)\),\((\d+),\s*(\d+)\)", text)
+    """Extract `(x0, y0),(x1, y1)` pairs from generated text."""
+    matches = re.findall(r"\((\d+),\s*(\d+)\)\s*,\s*\((\d+),\s*(\d+)\)", text or "")
     return [[float(x0), float(y0), float(x1), float(y1)] for x0, y0, x1, y1 in matches]
 
 
-# -------------------------
-#   LOAD + FORMAT DATASETS
-# -------------------------
-def get_datasets(format_data_flag=True):
-    # fresh download each run
+def _lazy_transform(cfg):
+    """Batch transform for `Dataset.with_transform` -- formats rows on access."""
+    def _apply(batch):
+        keys = list(batch.keys())
+        n = len(batch[keys[0]])
+        rows = [{k: batch[k][i] for k in keys} for i in range(n)]
+        return {"messages": [format_data(r, cfg)["messages"] for r in rows]}
+    return _apply
+
+
+def get_datasets(cfg=None, format_data_flag=True, lazy=False):
+    """Return `(train, val)`.
+
+    `lazy=True` formats rows on access via `with_transform`, which avoids holding
+    every decoded image in memory at once. The default stays eager because that
+    is the path the published runs used; the lazy path is covered by tests but
+    has not been run through a full training job.
+    """
     raw = load_dataset(dataset_id)
 
-    if format_data_flag:
-        # completely avoid Arrow/map — build plain Python lists
-        train = [format_data(ex) for ex in raw["train"]]
-        val = [format_data(ex) for ex in raw["val"]]
-    else:
-        train, val = raw["train"], raw["val"]
+    if not format_data_flag:
+        return raw["train"], raw["val"]
 
+    if lazy:
+        fn = _lazy_transform(cfg)
+        return raw["train"].with_transform(fn), raw["val"].with_transform(fn)
+
+    train = [format_data(ex, cfg) for ex in raw["train"]]
+    val = [format_data(ex, cfg) for ex in raw["val"]]
     return train, val

@@ -1,0 +1,17 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+exclude = [
+    ".venv",
+    "env_infer",
+    "nutrition_table_inference/AutoGPTQ",
+    "runs",
+]
+
+[tool.ruff.lint]
+# Critical correctness rules only: syntax errors, undefined names, redefinitions.
+# The codebase predates linting; this is a floor, not a style policy.
+select = ["E9", "F63", "F7", "F82", "F811"]

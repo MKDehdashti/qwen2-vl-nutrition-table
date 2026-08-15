@@ -6,11 +6,12 @@ import argparse
 import subprocess
 import numpy as np
 import torch
-from torchvision.ops import box_iou
 
 from transformers import Qwen2VLForConditionalGeneration, Qwen2VLProcessor
 
 from .dataset.data_utils import get_datasets, parse_boxes_from_text
+from .metrics import detection_metrics
+from .prompts import PLACEHOLDER_SYSTEM_TEXT, TASK_PROMPT
 from .viz_utils_infer import draw_box_0to1000
 
 
@@ -32,9 +33,13 @@ def eval_hf_dataset(
     max_new_tokens=256,
     out_dir="outputs/hf_eval",
     num_visuals=5,
-    prompt="Detect the bounding box of the nutrition table.",
+    prompt=TASK_PROMPT,
+    system_text=PLACEHOLDER_SYSTEM_TEXT,
     use_fast=True,
 ):
+    # system_text defaults to the placeholder string used for every committed
+    # benchmark in outputs/, so results stay reproducible. Pass SYSTEM_MESSAGE
+    # to evaluate the configuration the model was actually trained with.
     train, val = get_datasets(format_data_flag=True)
     ds = val if split == "val" else train
     n = min(num_samples, len(ds))
@@ -78,7 +83,7 @@ def eval_hf_dataset(
             continue
 
         messages = [
-            {"role": "system", "content": [{"type": "text", "text": "System message"}]},
+            {"role": "system", "content": [{"type": "text", "text": system_text}]},
             {"role": "user", "content": [
                 {"type": "image", "image": image},
                 {"type": "text", "text": prompt},
@@ -122,25 +127,7 @@ def eval_hf_dataset(
 
         pred_boxes = parse_boxes_from_text(out_text)
 
-        iou_mean, precision, recall, f1 = 0.0, 0.0, 0.0, 0.0
-        if gt_boxes and pred_boxes:
-            gt_t = torch.tensor(gt_boxes, dtype=torch.float32)
-            pr_t = torch.tensor(pred_boxes, dtype=torch.float32)
-            if gt_t.ndim == 1:
-                gt_t = gt_t.unsqueeze(0)
-            if pr_t.ndim == 1:
-                pr_t = pr_t.unsqueeze(0)
-
-            ious_mat = box_iou(gt_t, pr_t)
-            best_gt = ious_mat.max(dim=1)[0]
-            best_pr = ious_mat.max(dim=0)[0]
-            iou_mean = (best_gt.mean() + best_pr.mean()).item() / 2
-
-            matched = (ious_mat > 0.5).sum().item()
-            precision = matched / len(pr_t)
-            recall = matched / len(gt_t)
-            if precision + recall > 0:
-                f1 = 2 * precision * recall / (precision + recall)
+        iou_mean, precision, recall, f1 = detection_metrics(gt_boxes, pred_boxes)
 
         ious.append(iou_mean)
         precisions.append(precision)

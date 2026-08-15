@@ -5,6 +5,8 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
+from .prompts import TASK_PROMPT
+
 
 def run_inference_strict(model, processor, image_or_url, prompt,
                          max_new_tokens=512, dtype=None):
@@ -67,7 +69,7 @@ def draw_box_0to1000(sample, save_path=None):
 
 
 def quick_viz(idx=0, dataset=None, from_dir=None, split="val",
-              prompt="Detect the bounding box of the nutrition table.",
+              prompt=TASK_PROMPT,
               out_dir=None, save_name=None,
               quantized=True, use_adapters=True, cfg=None):
     from .model_utils import load_model
@@ -110,7 +112,7 @@ if __name__ == "__main__":
     parser.add_argument("--from_dir", type=str, required=True)
     parser.add_argument("--idx", type=int, default=0)
     parser.add_argument("--split", type=str, default="val")
-    parser.add_argument("--prompt", type=str, default="Detect the bounding box of the nutrition table.")
+    parser.add_argument("--prompt", type=str, default=TASK_PROMPT)
     args = parser.parse_args()
     cfg = {"model_id": "Qwen/Qwen2-VL-7B-Instruct"}
     print("quick_viz standalone mode requires dataset to be passed in code, not via this CLI.")

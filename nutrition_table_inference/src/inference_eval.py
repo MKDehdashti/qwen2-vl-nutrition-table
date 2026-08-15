@@ -10,14 +10,15 @@ from io import BytesIO
 import numpy as np
 import torch
 import requests
-from torchvision.ops import box_iou
 from transformers import Qwen2VLForConditionalGeneration, Qwen2VLProcessor
 
 from .dataset.data_utils import get_datasets, parse_boxes_from_text
+from .metrics import detection_metrics
+from .prompts import PLACEHOLDER_SYSTEM_TEXT, TASK_PROMPT
 from .viz_utils_infer import draw_box_0to1000
 
 
-DEFAULT_PROMPT = "Detect the bounding boxes of all nutrition tables in the image."
+DEFAULT_PROMPT = TASK_PROMPT  # kept as an alias; canonical string lives in prompts.py
 
 
 def get_gpu_memory_gb():
@@ -88,27 +89,8 @@ def get_gt_and_image(ex):
 
 
 def metrics_one(gt_boxes, pred_boxes):
-    iou_mean, precision, recall, f1 = 0.0, 0.0, 0.0, 0.0
-    if gt_boxes and pred_boxes:
-        gt_t = torch.tensor(gt_boxes, dtype=torch.float32)
-        pr_t = torch.tensor(pred_boxes, dtype=torch.float32)
-        if gt_t.ndim == 1:
-            gt_t = gt_t.unsqueeze(0)
-        if pr_t.ndim == 1:
-            pr_t = pr_t.unsqueeze(0)
-
-        ious_mat = box_iou(gt_t, pr_t)
-        best_gt = ious_mat.max(dim=1)[0]
-        best_pr = ious_mat.max(dim=0)[0]
-        iou_mean = (best_gt.mean() + best_pr.mean()).item() / 2
-
-        matched = (ious_mat > 0.5).sum().item()
-        precision = matched / len(pr_t)
-        recall = matched / len(gt_t)
-        if precision + recall > 0:
-            f1 = 2 * precision * recall / (precision + recall)
-
-    return iou_mean, precision, recall, f1
+    """Per-image (mean_iou, precision, recall, f1). See src/metrics.py."""
+    return detection_metrics(gt_boxes, pred_boxes, iou_threshold=0.5)
 
 
 def hf_infer_batch(hf_model, processor, images, prompt, system_text, max_new_tokens):
@@ -212,7 +194,7 @@ def eval_dataset(
     run_name="run",
     num_visuals=8,
     prompt=DEFAULT_PROMPT,
-    system_text="System message",
+    system_text=PLACEHOLDER_SYSTEM_TEXT,
     use_fast=True,
     server_url="http://127.0.0.1:8000/v1",
     api_key="EMPTY",
@@ -361,7 +343,7 @@ def main():
     parser.add_argument("--num_visuals", type=int, default=8)
 
     parser.add_argument("--prompt", type=str, default=DEFAULT_PROMPT)
-    parser.add_argument("--system_text", type=str, default="System message")
+    parser.add_argument("--system_text", type=str, default=PLACEHOLDER_SYSTEM_TEXT)
     parser.add_argument("--use_fast", action="store_true")
 
     parser.add_argument("--server_url", type=str, default="http://127.0.0.1:8000/v1")

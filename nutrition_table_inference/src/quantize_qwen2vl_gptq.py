@@ -5,7 +5,7 @@ import glob
 import torch
 
 from gptqmodel import GPTQModel, QuantizeConfig
-from dataset.data_utils import get_datasets
+from .dataset.data_utils import get_datasets
 
 model_id = "/workspace/projects/nutrition_table/nutrition_table_inference/model/Qwen2-VL-7B/final_model_exp13"
 quant_path = "/workspace/projects/nutrition_table/nutrition_table_inference/model/Qwen2-VL-7B/final_model_exp13_quantized_4bit"
