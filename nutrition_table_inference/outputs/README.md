@@ -46,7 +46,7 @@ Throughput peaks at c=8 and collapses at c=16 as the scheduler saturates.
 | `hf_eval/metrics_hf_bs4.json` | 123 | 0.816 | Batched HF eval, batch=4 |
 | `vllm_eval/metrics_exp13_unquantized.json` | 123 | 0.81 | vLLM full-dataset eval of the shipped model |
 | `vllm_eval/metrics_unquantized_older_training_run1219_2206.json` | 50 | 0.788 | **Superseded.** An earlier training run, kept for comparison |
-| `vllm_eval/metrics_not_quantized_with_system_and_strict_format.json` | 50 | **0.573** | **Negative result — prompt ablation, not a model regression** |
+| `vllm_eval/metrics_not_quantized_with_system_and_strict_format.json` | 50 | **0.573** | **Not a model regression** — an accidental prompt configuration, see below |
 
 ### About the 0.573 result
 
