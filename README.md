@@ -322,6 +322,10 @@ real one.
 
 ## Future work
 
+- Persist per-sample predictions from the eval scripts, not just aggregate statistics. Had
+  they been saved, the matching correction above could have been applied retroactively to
+  existing runs instead of requiring GPU time — the single change that would most improve
+  this pipeline's reproducibility
 - Re-measure precision/recall/F1 with the corrected one-to-one matching (needs a GPU)
 - A/B the placeholder system prompt against the real training system message
 - Close the 0.82 → 0.893 gap by productionizing the three-stage schedule
