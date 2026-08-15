@@ -1,92 +1,142 @@
-# Nutrition Table Detection
+# Nutrition Table Detection with Qwen2-VL-7B
 
-Fine-tuned **Qwen2-VL-7B-Instruct** to detect nutrition tables in product images. Given an image, the model outputs all bounding box coordinates as text.
+Fine-tuning a 7B vision-language model to localize nutrition tables in real-world product
+photographs — and serving it at **17.8 requests/second** on a single GPU.
 
-**Model**: [`MayaKD/qwen2-vl-7b-nutrition`](https://huggingface.co/MayaKD/qwen2-vl-7b-nutrition)  
-**Dataset**: [`openfoodfacts/nutrition-table-detection`](https://huggingface.co/datasets/openfoodfacts/nutrition-table-detection)  
-**Task**: image → normalized bounding boxes (0–1000 scale), encoded as text tokens.
+The model takes a product image and emits bounding boxes as text tokens, using Qwen2-VL's
+native grounding vocabulary. No detection head, no anchor boxes — localization is learned
+entirely as a sequence-generation task.
 
-The project runs in two phases, in order: first **fine-tuning** the model, then **inference** with the fine-tuned model. This README is organized the same way.
+[![Model](https://img.shields.io/badge/%F0%9F%A4%97%20Model-qwen2--vl--7b--nutrition-yellow)](https://huggingface.co/MayaKD/qwen2-vl-7b-nutrition-vllm)
+[![Dataset](https://img.shields.io/badge/%F0%9F%A4%97%20Dataset-nutrition--table--detection-blue)](https://huggingface.co/datasets/openfoodfacts/nutrition-table-detection)
+[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
----
+| | | |
+|:---:|:---:|:---:|
+| ![Cluttered shelf](docs/examples/example-shelf-cluttered.png) | ![Angled bottle](docs/examples/example-bottle-angled.png) | ![Close-up can](docs/examples/example-can-closeup.png) |
+| Cluttered shelf, small target | Angled label, glare | Tight crop, wide table |
 
-## Repository Layout
-
-```
-nutrition_table/
-├── nutrition_table_fine_tuning/    # Phase 1 — training code
-│   ├── src/
-│   │   ├── train.py                # Multi-stage training loop (LoRA, merge, eval)
-│   │   ├── model_utils.py          # Model loading, adapter merge, LoRA target selection
-│   │   ├── eval_utils.py           # IoU / Precision / Recall / F1 evaluation
-│   │   ├── viz_utils.py            # Bounding box visualization
-│   │   └── dataset/                # format_data (coord/box tags), collators
-│   ├── configs/exp*.yaml           # Per-experiment configs
-│   └── runs/                       # Training outputs (adapters, merged models)
-│
-├── nutrition_table_inference/      # Phase 2 — inference & benchmarking
-│   ├── src/
-│   │   ├── inference_eval.py       # Per-sample HF and vLLM latency + accuracy benchmark
-│   │   ├── vllm_throughput.py      # vLLM serving throughput measurement
-│   │   ├── eval_hf_dataset2.py     # Batched HF evaluation over full dataset
-│   │   ├── eval_vllm_dataset.py    # vLLM evaluation over full dataset
-│   │   └── quantize_qwen2vl_gptq.py# 4-bit GPTQ quantization (HF works, vLLM blocked)
-│   └── model/Qwen2-VL-7B/
-│       └── final_model_exp13/      # Active inference model (local serving copy)
-│
-├── README.md                       # This file — landing page
-├── project_report.md               # Concise technical writeup
-└── CLAUDE.md                       # Full operational reference (commands, gotchas)
-```
+*Model predictions on held-out validation images. Red box is the model's output; no ground
+truth is drawn.*
 
 ---
 
-## Phase 1 — Fine-Tuning
+## Results
 
-### Approach
+Shipped model **exp13**, evaluated on all 123 validation samples:
 
-Multi-stage **LoRA** fine-tuning of `Qwen/Qwen2-VL-7B-Instruct`. Up to 3 stages; after each stage the adapters are merged into the base so the next stage starts from clean full weights (not stacked adapters).
+| Metric | Value |
+|--------|:-----:|
+| Mean IoU | **0.82** |
+| Precision@0.5 | **0.91** |
+| Recall@0.5 | **0.89** |
+| F1@0.5 | **0.90** |
 
-| Stage | LoRA Targets | Purpose |
-|-------|-------------|---------|
-| 1 — Vision warmup *(optional)* | Last 8 vision blocks | Orient vision encoder to the task |
-| 2 — Full vision | All vision blocks + merger MLP | Full visual feature learning |
-| 3 — Joint | Vision (full) + LLM self-attn + MLP | End-to-end vision–language alignment |
+Accuracy is identical across serving backends — same weights, so HF `transformers` and vLLM
+agree to within measurement noise.
 
-The shipped model (**exp13**) uses **2 stages** — warmup was dropped after it showed no IoU gain. Training uses `SFTTrainer` + `accelerate`, BF16 + Flash Attention 2 + fused AdamW, best checkpoint by `eval_loss` with early stopping. See [`project_report.md`](project_report.md) for the multi-GPU merge-corruption bug and its fix.
+### Serving performance (single GPU, 123 val samples)
 
-### Running Training
+**vLLM under concurrent load** — real async concurrency, the production path:
 
-```bash
-cd nutrition_table_fine_tuning
-source .venv/bin/activate
+| Concurrency | Mean latency | P95 | Throughput |
+|:-----------:|:------------:|:---:|:----------:|
+| 1 | 1,378 ms | 1,506 ms | 0.73 req/s |
+| 4 | 399 ms | 467 ms | 9.89 req/s |
+| **8** | **435 ms** | 1,056 ms | **17.82 req/s** |
+| 16 | 16,528 ms | 22,653 ms | 0.94 req/s |
 
-# Single GPU
-python src/train.py --config configs/exp13.yaml
+Throughput scales cleanly to **c=8 (17.8 req/s, a 24× gain over sequential)**, then collapses
+at c=16 — 0.94 req/s with a 22-second P95 — as the scheduler saturates and requests queue
+behind each other. Pick **c=4** when P95 matters, **c=8** to maximize throughput, and never
+c=16 on this hardware.
 
-# Multi-GPU (2 GPUs)
-accelerate launch --multi_gpu --mixed_precision=bf16 src/train.py --config configs/exp13.yaml
+**HuggingFace `transformers` with batching** — the offline/evaluation path:
+
+| Batch | Mean latency/sample | P95 | VRAM |
+|:-----:|:-------------------:|:---:|:----:|
+| 1 | 890 ms | 989 ms | 17.2 GB |
+| 4 | 475 ms | 483 ms | 20.4 GB |
+| 16 | 321 ms | 533 ms | 29.9 GB |
+
+vLLM's 72 GB footprint is deliberate KV-cache pre-allocation for continuous batching, not a
+leak — which is why HF is the better choice for offline work on constrained hardware.
+
+Raw measurement files, including a documented negative result, are committed under
+[`nutrition_table_inference/outputs/`](nutrition_table_inference/outputs/README.md).
+
+---
+
+## Engineering highlight: silent weight corruption on multi-GPU merges
+
+The most interesting bug in the project produced no error and no warning.
+
+After multi-GPU training, evaluating the in-memory model gave **IoU 0.794**. Saving that same
+model and reloading it gave **0.300**. Identical weights in theory; a 62% accuracy loss in
+practice.
+
+The cause: every rank was calling `merge_and_unload()` and `save_pretrained()` simultaneously,
+so all processes wrote to the same shard files concurrently and interleaved their output. The
+resulting checkpoint was structurally valid — it loaded without complaint — but numerically
+garbage.
+
+The fix is small once located: guard the merge behind `accelerator.is_main_process` and fence
+it with `wait_for_everyone()` barriers on both sides. A second fix was needed for multi-stage
+training, where each stage must load the *previously merged directory* rather than restacking
+adapters. Post-fix, pre-merge and post-merge evaluations agree within ~1%.
+
+Isolating it required a series of `_merge_test_repro_*` runs that bisected the training
+pipeline, since the failure was invisible until a full reload-and-evaluate cycle.
+
+---
+
+## Approach
+
+LoRA fine-tuning of `Qwen/Qwen2-VL-7B-Instruct`, applied progressively across up to three
+stages. After each stage the adapters are merged into the base, so every stage begins from
+clean full weights rather than stacked adapters.
+
+| Stage | LoRA targets | Purpose |
+|-------|--------------|---------|
+| 1 — Vision warmup *(optional)* | Last 8 vision blocks | Orient the vision encoder |
+| 2 — Full vision | All vision blocks + merger MLP | Visual feature learning |
+| 3 — Joint | Vision + LLM self-attention & MLP | Vision–language alignment |
+
+Training runs on `SFTTrainer` + `accelerate` with BF16, Flash Attention 2, and fused AdamW.
+Best checkpoint is selected on `eval_loss` with early stopping (patience 3).
+
+### Boxes as text
+
+Dataset boxes arrive as `(y_min, x_min, y_max, x_max)` normalized to `[0, 1]`. Training
+converts them to `(x_min, y_min, x_max, y_max)` on a `[0, 1000]` scale and encodes them with
+Qwen2-VL's native grounding tokens:
+
+```
+<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(x0, y0),(x1, y1)<|box_end|>
 ```
 
-### Fine-Tuning Results
+Multiple boxes concatenate; images with no table produce `"No table found."`
 
-Accuracy is mean IoU on the 123-sample validation set.
+### Stage-count ablation
 
-| Run | Stages | GPUs | Time | Mean IoU |
-|-----|:------:|:----:|:----:|:--------:|
+| Run | Stages | GPUs | Wall time | Mean IoU |
+|-----|:------:|:----:|:---------:|:--------:|
+| repro_9 | 3 | 2× RTX Pro 6000 | 97 min | 0.870 |
 | repro_11 | 3 | 1× RTX Pro 6000 | 150 min | 0.886 |
-| **repro_12** | **3** | **2× RTX Pro 6000** | **89 min** | **0.893** |
+| repro_12 | 3 | 2× RTX Pro 6000 | 89 min | 0.893 |
 | **exp13 (shipped)** | **2** | **2× RTX Pro 6000** | — | **0.82** |
 
-Final shipped model (**exp13**): Mean IoU **0.82** · Precision **0.91** · Recall **0.89** · F1 **0.90**.
+The three-stage schedule reached **0.893**, showing there is roughly 7 IoU points of headroom
+above the shipped model. exp13 is the two-stage production run and the artifact that is
+published and reproducible; the `repro_*` weights were exploratory and were not preserved.
+Closing that gap is the top item under Future Work.
+
+Vision warmup (stage 1) was dropped from the production schedule after it showed no IoU gain
+once stage 2 already targets the full vision encoder.
 
 ---
 
-## Phase 2 — Inference
-
-Inference uses the fine-tuned **exp13** model. Two backends are supported with identical accuracy (same weights); they differ only in speed and memory.
-
-### Quick Start (HuggingFace)
+## Quick start
 
 ```bash
 pip install "transformers>=4.49" qwen-vl-utils accelerate torch
@@ -97,7 +147,7 @@ import torch
 from transformers import Qwen2VLForConditionalGeneration, Qwen2VLProcessor
 from qwen_vl_utils import process_vision_info
 
-REPO = "MayaKD/qwen2-vl-7b-nutrition"
+REPO = "MayaKD/qwen2-vl-7b-nutrition-vllm"   # merged weights at repo root
 SYSTEM = (
     "You are a Vision Language Model specialized in interpreting visual data from product images.\n"
     "Your task is to analyze the provided product images and detect the nutrition tables in a certain format.\n"
@@ -106,10 +156,8 @@ SYSTEM = (
 )
 PROMPT = "Detect the bounding boxes of all nutrition tables in the image."
 
-# Merged fine-tuned weights live in a subfolder; the processor is the stock Qwen2-VL one
 model = Qwen2VLForConditionalGeneration.from_pretrained(
-    REPO, subfolder="exp13_mod121925_joint/merged",
-    dtype=torch.bfloat16, device_map="auto",
+    REPO, dtype=torch.bfloat16, device_map="auto",
 )
 processor = Qwen2VLProcessor.from_pretrained("Qwen/Qwen2-VL-7B-Instruct")
 
@@ -130,24 +178,25 @@ trimmed = [o[len(i):] for i, o in zip(inputs.input_ids, out_ids)]
 print(processor.batch_decode(trimmed, skip_special_tokens=False)[0])
 ```
 
-The model emits each detection as
-`<|object_ref_start|>nutrition-table<|object_ref_end|><|box_start|>(x_min, y_min),(x_max, y_max)<|box_end|>`,
-with coordinates on a **0–1000** scale.
+> **The prompt is part of the interface.** This model is unusually sensitive to instruction
+> wording — an ablation with a stricter output-format instruction dropped mean IoU from 0.82
+> to **0.573** with unchanged weights. Use the system message and prompt exactly as written
+> above.
 
-### vLLM Serving (production)
-
-vLLM must serve from a **local path** (it cannot load from an HF subfolder), so download/clone the `exp13_mod121925_joint/merged` weights locally first.
+### vLLM serving
 
 ```bash
-# Start the server (separate terminal; --host 0.0.0.0 for remote access)
 python -m vllm.entrypoints.openai.api_server \
-  --model /path/to/final_model_exp13 \
+  --model MayaKD/qwen2-vl-7b-nutrition-vllm \
   --dtype bfloat16 --host 0.0.0.0 --port 8000
+```
 
-# Then call the OpenAI-compatible endpoint
+Then call the OpenAI-compatible endpoint:
+
+```bash
 curl http://127.0.0.1:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model": "/path/to/final_model_exp13",
+  -d '{"model": "MayaKD/qwen2-vl-7b-nutrition-vllm",
        "messages": [{"role": "user", "content": [
          {"type": "text", "text": "Detect the bounding boxes of all nutrition tables in the image."},
          {"type": "image_url", "image_url": {"url": "https://static.openfoodfacts.org/images/products/27563564/2.jpg"}}
@@ -155,46 +204,91 @@ curl http://127.0.0.1:8000/v1/chat/completions \
        "max_tokens": 300, "temperature": 0.0}'
 ```
 
-### Inference Results (exp13, 123 val samples, single GPU)
+### Models on HuggingFace
 
-| Backend | Config | Mean Latency (ms) | P95 (ms) | Throughput | VRAM |
-|---------|--------|:-----------------:|:--------:|:----------:|:----:|
-| HF | batch=4 | 481 | 483 | ~2 req/s | 20 GB |
-| HF | batch=1 | 890 | 989 | 1.1 req/s | 17 GB |
-| vLLM | concurrency=4 | 394 | 482 | **10 req/s** | 72 GB |
-| vLLM | concurrency=1 | 1,378 | 1,506 | 0.7 req/s | 72 GB |
+| Repo | Contents | Use for |
+|------|----------|---------|
+| [`qwen2-vl-7b-nutrition-vllm`](https://huggingface.co/MayaKD/qwen2-vl-7b-nutrition-vllm) | Merged weights, flat at repo root | Inference and vLLM serving |
+| [`qwen2-vl-7b-nutrition`](https://huggingface.co/MayaKD/qwen2-vl-7b-nutrition) | Both stages: adapters, checkpoints, optimizer state | Resuming or reproducing training |
 
-- **HF** — best for offline evaluation and dataset processing (batch_size=4).
-- **vLLM** — best for production serving (~9× HF throughput at concurrency=4; 72 GB is intentional pre-allocation for continuous batching).
-
-### Quantization
-
-4-bit GPTQ via `GPTQModel` works for **HF inference**. vLLM serving of the quantized model is **blocked** — Qwen2-VL is a vision-language model and GPTQModel's tensor naming for VLMs doesn't match vLLM's GPTQ loader (`KeyError: layers.10.mlp.down_proj.g_idx`). Unresolved.
+A Gradio → Triton → vLLM demo Space exists but is kept paused, since the model needs a
+24 GB GPU to serve and idle GPU time is billed hourly. The example images above are its
+output.
 
 ---
 
-## Docs
+## Quantization
 
-- [`project_report.md`](project_report.md) — approach, results, and code overview
-- [`CLAUDE.md`](CLAUDE.md) — all commands, configs, and operational notes
+4-bit GPTQ quantization via `GPTQModel` produces a working model (6.9 GB, down from 16.6 GB)
+that runs correctly under HF inference.
+
+**Serving it on vLLM is unresolved.** vLLM's GPTQ loader fails with
+`KeyError: 'layers.10.mlp.down_proj.g_idx'`. The cause is that Qwen2-VL is a vision-language
+model rather than a standard `AutoModelForCausalLM`, and GPTQModel's tensor naming for VLM
+layers does not match what vLLM's loader expects. `AutoGPTQ` was tried as an alternative and
+failed earlier, at CUDA extension compilation.
+
+This needs either an upstream fix or a different quantization toolchain. It is documented
+rather than hidden because the failure mode is a genuine gap in VLM tooling.
 
 ---
 
-## Roadmap
+## Repository layout
 
-- [ ] Add advanced loss functions (Dice, IoU)
-- [ ] Implement balanced sampling for rare and small objects
-- [ ] Resolve vLLM serving for the 4-bit GPTQ quantized model
-- [ ] Provide dataset preprocessing scripts
+```
+nutrition_table/
+├── nutrition_table_fine_tuning/        # Training
+│   ├── src/
+│   │   ├── train.py                    # Multi-stage loop (LoRA, merge, eval)
+│   │   ├── model_utils.py              # Loading, adapter merge, LoRA target selection
+│   │   ├── eval_utils.py               # IoU / Precision / Recall / F1
+│   │   └── dataset/                    # Coord conversion, box tags, collators
+│   └── configs/exp*.yaml               # 13 experiment configs
+│
+├── nutrition_table_inference/          # Inference & benchmarking
+│   ├── src/
+│   │   ├── inference_eval.py           # HF batched + vLLM accuracy/latency
+│   │   ├── vllm_throughput.py          # Concurrency benchmark (async)
+│   │   ├── eval_hf_dataset2.py         # Full-dataset HF evaluation
+│   │   ├── eval_vllm_dataset.py        # Full-dataset vLLM evaluation
+│   │   └── quantize_qwen2vl_gptq.py    # 4-bit GPTQ quantization
+│   └── outputs/                        # Committed benchmark JSONs + notes
+│
+└── docs/examples/                      # Prediction visualizations
+```
+
+---
+
+## Dataset note
+
+`openfoodfacts/nutrition-table-detection` annotates **only** the official EU-format nutrition
+declaration — the standardized "Per 100 g" table. Colorful summary panels and "per portion"
+columns are not annotated even when clearly visible, so an image with two side-by-side
+nutrition displays carries only one ground-truth box. The model learns this distinction and
+reproduces it.
+
+Of the 123 validation samples, 117 (95%) contain exactly one box, five contain two, and one
+contains three. A few multi-box annotations are noise, including a 2×1-pixel box beside a
+real one.
+
+---
+
+## Future work
+
+- Close the 0.82 → 0.893 gap by productionizing the three-stage schedule
+- Add IoU-aware and Dice loss terms rather than pure token cross-entropy
+- Balanced sampling for small and rare targets
+- Resolve vLLM serving for the 4-bit GPTQ model
+- Publish dataset preprocessing scripts
 
 ---
 
 ## License
 
-Distributed under the **MIT License**. Fine-tunes **Qwen2-VL** (developed by Alibaba Cloud), available under the [Apache-2.0 License](https://huggingface.co/Qwen).
+MIT — see [LICENSE](LICENSE). Fine-tunes [Qwen2-VL](https://huggingface.co/Qwen) (Alibaba
+Cloud), released under Apache-2.0.
 
 ## Author
 
-Maintained by [MKDehdashti](https://github.com/MKDehdashti). Contributions and feedback are welcome.
-
-Repository: [github.com/MKDehdashti/qwen2-vl-nutrition-table](https://github.com/MKDehdashti/qwen2-vl-nutrition-table)
+**Maryam Dehdashti** — [GitHub](https://github.com/MKDehdashti) ·
+[HuggingFace](https://huggingface.co/MayaKD)

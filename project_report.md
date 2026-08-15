@@ -2,7 +2,7 @@
 
 Fine-tuned **Qwen2-VL-7B-Instruct** to detect nutrition tables in product images. Given an image, the model outputs all bounding boxes as text tokens. Trained on [`openfoodfacts/nutrition-table-detection`](https://huggingface.co/datasets/openfoodfacts/nutrition-table-detection), evaluated on 123 validation samples.
 
-**Model on HuggingFace**: [`MayaKD/qwen2-vl-7b-nutrition`](https://huggingface.co/MayaKD/qwen2-vl-7b-nutrition)
+**Model on HuggingFace**: [`MayaKD/qwen2-vl-7b-nutrition-vllm`](https://huggingface.co/MayaKD/qwen2-vl-7b-nutrition-vllm) (merged weights, ready to serve) · [`MayaKD/qwen2-vl-7b-nutrition`](https://huggingface.co/MayaKD/qwen2-vl-7b-nutrition) (training artifacts)
 
 The project has two phases, in order: **(1) fine-tuning** the model, then **(2) inference** with the fine-tuned model. The sections below follow that order.
 
@@ -73,7 +73,7 @@ The shipped model is **exp13**. Its full accuracy on the validation set:
 | Recall@0.5 | 0.89 |
 | F1@0.5 | 0.90 |
 
-The 0.82 vs 0.893 gap is because they are different experiments: repro_12 used a 3-stage schedule tuned over many iterations; exp13 is a cleaner 2-stage production run.
+The three-stage schedule reached **0.893**, so there is roughly 7 IoU points of headroom above the shipped model. exp13 is the two-stage production run: it is the artifact that is published, reproducible, and benchmarked throughout this report. The `repro_*` runs were exploratory and their weights were not preserved. Productionizing the three-stage schedule is the top open item.
 
 ---
 
@@ -83,25 +83,41 @@ Inference runs the **fine-tuned exp13 model**. Two backends are supported — Hu
 
 ### Backends
 
-- **HuggingFace `transformers`** — best for offline evaluation and dataset processing. Use `batch_size=4`. 17–20 GB VRAM.
-- **vLLM** — best for production serving and multi-user throughput. Use `concurrency ≥ 4`. Pre-allocates ~72 GB for continuous batching (intentional, not a leak).
+- **HuggingFace `transformers`** — best for offline evaluation and dataset processing. Use `batch_size=4`, or 16 if VRAM allows. 17–30 GB VRAM.
+- **vLLM** — best for production serving and multi-user throughput. Use `concurrency=4` when P95 matters, `8` to maximize throughput; avoid 16. Pre-allocates ~72 GB for continuous batching (intentional, not a leak).
 
 vLLM must be served from a **local path** (it cannot load from an HF subfolder).
 
 ### Inference Results (exp13, 123 val samples, single GPU)
 
-| Backend | Config | Mean Latency (ms) | P95 Latency (ms) | Throughput |
-|---------|--------|:-----------------:|:----------------:|:----------:|
-| HF | batch=4 | 481 | 483 | ~2 req/s |
-| HF | batch=1 | 890 | 989 | 1.1 req/s |
-| vLLM | concurrency=4 | 394 | 482 | **10 req/s** |
-| vLLM | concurrency=1 | 1,378 | 1,506 | 0.7 req/s |
+**vLLM under concurrent load** (`vllm_throughput.py`, real `asyncio.Semaphore` concurrency):
 
-vLLM at concurrency=4 delivers ~9× HF throughput, which is why it is the production choice despite the higher memory footprint.
+| Concurrency | Mean Latency | P95 | Throughput |
+|:-----------:|:------------:|:---:|:----------:|
+| 1 | 1,378 ms | 1,506 ms | 0.73 req/s |
+| 4 | 399 ms | 467 ms | 9.89 req/s |
+| **8** | **435 ms** | 1,056 ms | **17.82 req/s** |
+| 16 | 16,528 ms | 22,653 ms | 0.94 req/s |
+
+Throughput scales to **17.82 req/s at c=8** — 24× the sequential rate — then collapses at c=16 (0.94 req/s, 22.7 s P95) as the scheduler saturates. c=4 is the best latency/throughput compromise; c=8 maximizes throughput.
+
+**HuggingFace `transformers`** (real batching: one padded `generate()` per batch):
+
+| Batch | Mean Latency/sample | P95 | VRAM |
+|:-----:|:-------------------:|:---:|:----:|
+| 1 | 890 ms | 989 ms | 17.2 GB |
+| 4 | 475 ms | 483 ms | 20.4 GB |
+| 16 | 321 ms | 533 ms | 29.9 GB |
+
+vLLM pre-allocates ~72 GB for KV cache regardless of load, so HF remains the better option for offline work on constrained hardware.
+
+> **Measurement caveat.** `inference_eval.py`'s vLLM path issues requests sequentially, so its `--batch_size` flag does not batch — it only rescales the reported per-sample latency. Accuracy from that path is valid; its vLLM *latency* figures are not, and are excluded here. All vLLM performance numbers above come from `vllm_throughput.py`. Raw JSONs are committed under `nutrition_table_inference/outputs/`.
 
 ### Quantization
 
-4-bit GPTQ via `GPTQModel` works for HF inference. vLLM serving is blocked: Qwen2-VL is a vision-language model and GPTQModel's tensor naming for VLMs doesn't match vLLM's GPTQ loader (`KeyError: layers.10.mlp.down_proj.g_idx`). Unresolved.
+4-bit GPTQ via `GPTQModel` produces a working 6.9 GB model (from 16.6 GB) that runs correctly under HF inference.
+
+vLLM serving is blocked: Qwen2-VL is a vision-language model rather than a standard `AutoModelForCausalLM`, and GPTQModel's tensor naming for VLM layers doesn't match vLLM's GPTQ loader (`KeyError: layers.10.mlp.down_proj.g_idx`). `AutoGPTQ` was tried as an alternative and failed earlier, at CUDA extension compilation. Unresolved — it needs an upstream fix or a different quantization toolchain.
 
 ---
 

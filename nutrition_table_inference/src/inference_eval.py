@@ -160,6 +160,14 @@ def hf_infer_batch(hf_model, processor, images, prompt, system_text, max_new_tok
 
 
 def vllm_infer_batch(server_url, api_key, model, images, prompt, system_text, max_new_tokens):
+    """Send `images` to the vLLM OpenAI endpoint ONE AT A TIME, sequentially.
+
+    Despite the name, this does not batch: there is no concurrency here, so
+    `--batch_size` does not change how requests are issued. It only changes the
+    divisor used for per-sample latency in eval_dataset(). Do not use this path
+    to compare vLLM batch sizes -- the differences are run-to-run noise.
+    Use vllm_throughput.py (asyncio.Semaphore) for real concurrency benchmarks.
+    """
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     url = server_url.rstrip("/") + "/chat/completions"
 

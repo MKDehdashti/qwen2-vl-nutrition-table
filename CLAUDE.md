@@ -212,8 +212,8 @@ python -m src.inference_eval \
   --run_name exp13_hf_bs4 \
   --batch_size 4
 
-# 4-bit quantized — NOTE: this model no longer exists on disk (see Quantization).
-# Re-run quantize_qwen2vl_gptq.py first or this command will fail.
+# 4-bit quantized — NOTE: not on disk anymore. Pull MayaKD/qwen2-vl-7b-gptq-nutrition
+# (private) to this path first, or the command will fail.
 python -m src.inference_eval \
   --backend hf \
   --model model/Qwen2-VL-7B/final_model_exp13_quantized_4bit \
@@ -263,7 +263,9 @@ python -m src.inference_eval \
   --batch_size 4 \
   --server_url http://127.0.0.1:8000/v1
 
-# Serving throughput benchmark (concurrency=4 is the sweet spot per benchmarks)
+# Serving throughput benchmark. c=8 peaks throughput (17.82 req/s); c=4 is the
+# better latency/throughput compromise; c=16 collapses. This is the ONLY valid
+# way to benchmark vLLM here — see the note in Inference Results.
 python -m src.vllm_throughput \
   --model /workspace/projects/nutrition_table/nutrition_table_inference/model/Qwen2-VL-7B/final_model_exp13 \
   --run_name vllm_c4 --concurrency 4
@@ -299,29 +301,32 @@ Accuracy is identical across backends (same exp13 weights, Mean IoU 0.82 — see
 
 ### Inference benchmark (exp13 final model, 123 val samples, single GPU)
 
-**Offline / per-sample latency:**
+**HF offline batching** (real batching: one padded `generate()` per batch) — source `outputs/eval/exp13_hf_bs*_1.json`:
 
-| Backend | Batch | Mean IoU | Mean Latency (ms) | P95 Latency (ms) | GPU Mem (GB) |
-|---------|:-----:|:--------:|:-----------------:|:----------------:|:------------:|
-| HF | 1 | 0.82 | 890 | 989 | 17.16 |
-| HF | 4 | 0.82 | **481** | **483** | 20.37 |
-| vLLM | 1 | 0.83 | 1,410 | 1,498 | 72.51 |
-| vLLM | 4 | 0.82 | 378 | 498 | 72.51 |
+| Backend | Batch | Mean IoU | Mean Latency (ms/sample) | P95 (ms) | GPU Mem (GB) |
+|---------|:-----:|:--------:|:------------------------:|:--------:|:------------:|
+| HF | 1 | 0.82 | 890.32 | 989.31 | 17.16 |
+| HF | 4 | 0.82 | **475.29** | 483.48 | 20.37 |
+| HF | 16 | 0.82 | 320.91 | 532.85 | 29.92 |
 
-**Serving throughput (vLLM's intended workload):**
+**vLLM serving concurrency** (real async concurrency) — source `outputs/throughput/vllm_c*.json`:
 
-| Backend | Concurrency | Mean Latency (ms) | Requests/s | GPU Mem (GB) |
-|---------|:-----------:|:-----------------:|:----------:|:------------:|
-| HF (sequential) | bs=1 | 890 | 1.12 | 17.16 |
-| HF (batched) | bs=4 | 481 | ~2.08 | 20.37 |
-| vLLM | c=1 | 1,378 | 0.73 | 72.51 |
-| **vLLM** | **c=4** | **394** | **10.01** | **72.51** |
+| Concurrency | Mean Latency (ms) | P95 (ms) | Requests/s | GPU Mem (GB) |
+|:-----------:|:-----------------:|:--------:|:----------:|:------------:|
+| 1 | 1,377.62 | 1,505.59 | 0.73 | 72.51 |
+| 4 | 398.39 | 466.67 | 9.89 | 72.51 |
+| **8** | **434.59** | 1,056.33 | **17.82** | 72.51 |
+| 16 | 16,527.85 | 22,652.71 | 0.94 | 72.51 |
+
+Throughput peaks at **c=8 (17.82 req/s)**; c=16 falls off a cliff (0.94 req/s, 22.7 s P95) as the scheduler thrashes. c=4 is the best latency/throughput compromise if P95 matters; c=8 if raw throughput matters.
 
 vLLM's 72 GB memory usage is intentional pre-allocation for continuous batching, not a bug.
 
+> **Do not benchmark vLLM with `inference_eval.py --batch_size`.** `vllm_infer_batch()` issues requests in a sequential `for` loop, so `--batch_size` only changes the divisor at `inference_eval.py:296` — it does not batch or parallelize anything. Any vLLM "batch size" comparison from that script is measuring run-to-run noise. Use `vllm_throughput.py` (real `asyncio.Semaphore` concurrency) for all vLLM performance claims. The HF path in the same script *does* batch properly and its numbers are valid.
+
 **When to use which backend:**
-- **HF**: model evaluation, research, offline dataset processing (use batch_size=4)
-- **vLLM**: production API, multi-user serving, high throughput (use concurrency ≥ 4)
+- **HF**: model evaluation, research, offline dataset processing (batch_size=4, or 16 if VRAM allows)
+- **vLLM**: production API, multi-user serving (c=4 for latency-sensitive, c=8 for max throughput; never c=16)
 
 ---
 
@@ -332,9 +337,9 @@ vLLM's 72 GB memory usage is intentional pre-allocation for continuous batching,
 python /workspace/projects/nutrition_table/nutrition_table_inference/src/quantize_qwen2vl_gptq.py
 ```
 
-**Status — artifact lost**: `model/Qwen2-VL-7B/final_model_exp13_quantized_4bit` was **deleted from disk and was never uploaded to HF** (verified 2026-08-14). It is gone; re-running the script above is the only way to get it back. Kept below is what was learned from it.
+**Status**: the local copy at `model/Qwen2-VL-7B/final_model_exp13_quantized_4bit` is gone from disk, but the weights are **safe on HF** at `MayaKD/qwen2-vl-7b-gptq-nutrition` (private, 6.94 GB, 2 shards + `quantize_config.json` + `quant_log.csv`). Re-download from there rather than re-running the quantization.
 
-It worked for **HF inference**. vLLM serving was **blocked**:
+It works for **HF inference**. vLLM serving is **blocked**:
 - Error: `KeyError: 'layers.10.mlp.down_proj.g_idx'`
 - Root cause: Qwen2-VL is a vision-language model, not a standard `AutoModelForCausalLM`; GPTQModel's output tensor naming for VLMs does not match vLLM's GPTQ loader expectations
 - `AutoGPTQ` was also tried but failed at CUDA extension compilation (ninja build error)
