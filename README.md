@@ -7,6 +7,7 @@ The model takes a product image and emits bounding boxes as text tokens, using Q
 native grounding vocabulary. No detection head, no anchor boxes — localization is learned
 entirely as a sequence-generation task.
 
+[![CI](https://github.com/MKDehdashti/qwen2-vl-nutrition-table/actions/workflows/ci.yml/badge.svg)](https://github.com/MKDehdashti/qwen2-vl-nutrition-table/actions/workflows/ci.yml)
 [![Model](https://img.shields.io/badge/%F0%9F%A4%97%20Model-qwen2--vl--7b--nutrition-yellow)](https://huggingface.co/MayaKD/qwen2-vl-7b-nutrition-vllm)
 [![Dataset](https://img.shields.io/badge/%F0%9F%A4%97%20Dataset-nutrition--table--detection-blue)](https://huggingface.co/datasets/openfoodfacts/nutrition-table-detection)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)

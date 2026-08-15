@@ -166,10 +166,13 @@ runs anywhere in seconds; tests needing torch skip themselves. Both files are du
 each subproject and tests assert the copies stay byte-identical — **edit one, copy it over the
 other**.
 
-**CI is written but not yet active**: the workflow sits at `ci/ci.yml` rather than
-`.github/workflows/`, because the push token lacked GitHub's `workflow` scope. `ci/README.md`
-has the two-command activation. It runs pytest on 3.10/3.12 plus a ruff smoke lint; both pass
-locally.
+**CI is active**: `.github/workflows/ci.yml` runs pytest on Python 3.10 and 3.12 plus a ruff
+smoke lint, on every push to `main` and every PR. pytest and ruff are version-pinned so a
+future upstream release cannot turn the build red on its own.
+
+Note that the local `.venv` push token lacks GitHub's `workflow` scope, so **changes to
+`.github/workflows/*` cannot be pushed from this machine** — edit that file through the GitHub
+web UI, or use a token with `workflow` scope.
 
 ### Training Results
 
